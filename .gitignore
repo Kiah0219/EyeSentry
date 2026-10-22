@@ -1,0 +1,14 @@
+# 工具与本地环境（不入库）
+.workbuddy/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# 运行时产物
+data/
+.models_cache/
+models/*.engine
+*.mp4
+*.log
