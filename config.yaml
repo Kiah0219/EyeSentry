@@ -23,3 +23,20 @@ detector:
   # COCO 类别编号白名单；留空表示全部类别
   # 0 人 / 15 猫 / 24 背包 / 39 瓶子 / 41 杯子 / 56 椅子 / 63 笔记本 / 67 手机 / 73 书 / 74 时钟
   classes: [0, 15, 24, 39, 41, 56, 63, 67, 73, 74]
+
+dwell:
+  # 同一跟踪 ID 连续存在多久算一次停留
+  seconds: 5.0
+  # 触发后多久内不重复播报
+  cooldown_seconds: 30
+  # 目标短暂消失多久仍视为连续（抵抗单帧漏检）
+  lost_tolerance_seconds: 2.0
+
+tts:
+  engine: edge
+  voice: zh-CN-XiaoxiaoNeural
+  # 可用变量：{n} 人数、{dwell} 阈值秒数
+  template: "检测到{n}人停留超过{dwell}秒"
+  channels:
+    web: true
+    device: true

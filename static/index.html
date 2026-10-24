@@ -27,51 +27,143 @@
   }
   .dot.ok { background: #3fb950; box-shadow: 0 0 6px #3fb95088; }
   .dot.bad { background: #f85149; }
-  main { padding: 18px; }
+  .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #c9d1d9; cursor: pointer; }
+  .switch input { accent-color: #3fb950; }
+  button {
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+  }
+  button:hover { background: #30363d; }
+  button.armed { background: #1f6feb; border-color: #1f6feb; }
+  button.warn { background: #9e6a03; border-color: #bb8009; }
+  main {
+    padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px;
+    align-items: start;
+  }
   .stage {
     position: relative; background: #000; border: 1px solid #21262d;
-    border-radius: 8px; overflow: hidden; max-width: 1280px; margin: 0 auto;
-    aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; overflow: hidden; aspect-ratio: 16 / 9;
+    display: flex; align-items: center; justify-content: center;
   }
   .stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .placeholder {
-    position: absolute; color: #7d8590; text-align: center; padding: 0 24px;
-  }
+  .placeholder { position: absolute; color: #7d8590; text-align: center; padding: 0 24px; }
   .placeholder.hidden { display: none; }
-  footer {
-    max-width: 1280px; margin: 12px auto 0; color: #7d8590; font-size: 12px;
+  .stage-footer {
+    margin-top: 12px; color: #7d8590; font-size: 12px;
     display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  aside { border: 1px solid #21262d; border-radius: 8px; background: #161b22; overflow: hidden; }
+  aside h2 {
+    margin: 0; padding: 10px 14px; font-size: 13px; font-weight: 600;
+    border-bottom: 1px solid #21262d; display: flex; justify-content: space-between;
+  }
+  aside h2 em { font-style: normal; color: #7d8590; font-weight: 400; font-size: 12px; }
+  #alerts { list-style: none; margin: 0; padding: 0; max-height: 62vh; overflow-y: auto; }
+  #alerts li {
+    padding: 10px 14px; border-bottom: 1px solid #21262d; cursor: pointer;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  #alerts li:hover { background: #1c2128; }
+  #alerts li.fresh { animation: flash 2.4s ease-out; }
+  @keyframes flash { from { background: #1f6feb44; } to { background: transparent; } }
+  #alerts img { width: 56px; height: 32px; object-fit: cover; border-radius: 4px; flex: none; background: #0d1117; }
+  #alerts .meta { min-width: 0; }
+  #alerts .text { font-size: 12px; }
+  #alerts .time { font-size: 11px; color: #7d8590; font-variant-numeric: tabular-nums; }
+  #alerts .empty { color: #7d8590; font-size: 12px; cursor: default; justify-content: center; }
+  #modal {
+    position: fixed; inset: 0; background: #000d; display: none;
+    align-items: center; justify-content: center; z-index: 10; padding: 24px;
+  }
+  #modal.show { display: flex; }
+  #modal img { max-width: 100%; max-height: 88vh; border-radius: 8px; }
+  #classes {
+    display: none; padding: 12px 18px; border-bottom: 1px solid #21262d; background: #12171d;
+  }
+  #classes.show { display: block; }
+  #classes .row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  #classes .row label { font-size: 12px; color: #c9d1d9; }
+  #classes .row input[type=range] { width: 180px; accent-color: #3fb950; }
+  #class-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 4px 10px; max-height: 190px; overflow-y: auto;
+  }
+  #class-grid label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #c9d1d9; cursor: pointer; }
+  #class-grid input { accent-color: #3fb950; }
+  #class-grid .zh { color: #7d8590; font-size: 11px; }
+  #hint {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 22px;
+    background: #9e6a03; color: #fff; padding: 8px 16px; border-radius: 6px;
+    font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  #hint.show { opacity: 1; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    #alerts { max-height: 40vh; }
   }
 </style>
 </head>
 <body>
 <header>
-  <div class="brand">EyeSentry<span>M0 · 相机出画</span></div>
+  <div class="brand">EyeSentry<span>M2 · 停留播报</span></div>
+  <div class="controls">
+    <button id="unlock" class="warn">点击解锁音频</button>
+    <button id="toggle-classes">检测类别</button>
+    <label class="switch"><input type="checkbox" id="ch-web" checked>网页播报</label>
+    <label class="switch"><input type="checkbox" id="ch-device" checked>本体播报</label>
+  </div>
   <div class="stats">
     <div class="stat"><b id="s-status"><span class="dot"></span>—</b><i>状态</i></div>
     <div class="stat"><b id="s-source">—</b><i>相机源</i></div>
     <div class="stat"><b id="s-size">—</b><i>分辨率</i></div>
     <div class="stat"><b id="s-fps">—</b><i>实测帧率</i></div>
     <div class="stat"><b id="s-boxes">—</b><i>目标</i></div>
+    <div class="stat"><b id="s-alerts">—</b><i>告警</i></div>
   </div>
 </header>
 
-<main>
-  <div class="stage">
-    <img id="video" alt="实时画面">
-    <div class="placeholder" id="placeholder">正在连接相机…</div>
+<div id="classes">
+  <div class="row">
+    <strong style="font-size:12px">检测类别</strong>
+    <span style="font-size:12px;color:#7d8590" id="class-count">已选 0 类</span>
+    <label>置信度 <input type="range" id="conf" min="0.05" max="0.95" step="0.05" value="0.4">
+      <span id="conf-val" style="font-variant-numeric:tabular-nums">0.40</span></label>
+    <span style="font-size:11px;color:#7d8590">改动 3 秒内生效，无需重启</span>
   </div>
-  <footer>
-    <span id="s-note">检测功能在 M1 接入</span>
-    <span id="s-seq">帧序号 —</span>
-  </footer>
+  <div id="class-grid"></div>
+</div>
+
+<main>
+  <section>
+    <div class="stage">
+      <img id="video" alt="实时画面">
+      <div class="placeholder" id="placeholder">正在连接相机…</div>
+    </div>
+    <div class="stage-footer">
+      <span id="s-note">加载中…</span>
+      <span id="s-seq">帧序号 —</span>
+    </div>
+  </section>
+
+  <aside>
+    <h2>告警记录 <em id="alert-count">0 条</em></h2>
+    <ul id="alerts"><li class="empty">暂无告警</li></ul>
+  </aside>
 </main>
+
+<div id="modal"><img id="modal-img" alt="告警截图"></div>
+<div id="hint"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const video = $("video");
 const placeholder = $("placeholder");
+const listEl = $("alerts");
+let unlocked = false;
+let channels = { web: true, device: true };
 
+/* ---------- 画面 ---------- */
 video.addEventListener("error", () => {
   placeholder.textContent = "画面流中断，正在重试…";
   placeholder.classList.remove("hidden");
@@ -82,10 +174,236 @@ function startVideo() {
 }
 startVideo();
 
+/* ---------- 音频解锁（F-30：必须明确提示，不静默失败） ---------- */
+const player = new Audio();
+let audioCtx = null;
+
+$("unlock").addEventListener("click", async () => {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") await audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0;
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.05);
+    unlocked = true;
+    const btn = $("unlock");
+    btn.textContent = "音频已解锁";
+    btn.classList.remove("warn");
+    btn.classList.add("armed");
+  } catch (err) {
+    hint("音频解锁失败：" + err.message);
+  }
+});
+
+function hint(text) {
+  const el = $("hint");
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(hint._t);
+  hint._t = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function playWeb(alert) {
+  if (!channels.web) return;
+  if (!unlocked) { hint("音频未解锁，点左上角「点击解锁音频」"); return; }
+  if (!alert.audio_url) {
+    // F-32：合成失败时改用浏览器内置语音
+    if ("speechSynthesis" in window) {
+      speechSynthesis.speak(new SpeechSynthesisUtterance(alert.text));
+    }
+    return;
+  }
+  player.src = alert.audio_url + "?t=" + Date.now();
+  player.play().catch((err) => hint("网页播放失败：" + err.message));
+}
+
+/* ---------- 检测类别与阈值（F-16 / F-17：3 秒内生效，不重启） ---------- */
+let classOptions = [];
+let selectedClasses = new Set();
+let classPanelReady = false;
+
+/* 后端约定空白名单 = 全部类别（F-16 勾掉全部即回到全量检测） */
+function updateClassCount() {
+  const n = selectedClasses.size;
+  $("class-count").textContent = n
+    ? "已选 " + n + " 类"
+    : "未勾选 = 全部 " + classOptions.length + " 类";
+}
+
+function renderClassGrid() {
+  const grid = $("class-grid");
+  grid.innerHTML = "";
+  classOptions.forEach((opt) => {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = selectedClasses.has(opt.id);
+    cb.addEventListener("change", () => {
+      if (cb.checked) selectedClasses.add(opt.id);
+      else selectedClasses.delete(opt.id);
+      updateClassCount();
+      scheduleSettings({ classes: [...selectedClasses].sort((a, b) => a - b) });
+    });
+    label.append(cb, document.createTextNode(opt.name));
+    grid.append(label);
+  });
+  updateClassCount();
+}
+
+$("toggle-classes").addEventListener("click", () => {
+  $("classes").classList.toggle("show");
+  if (!$("classes").classList.contains("show")) return;
+  if (!classPanelReady && classOptions.length) {
+    renderClassGrid();
+    classPanelReady = true;
+  }
+});
+
+let settingsTimer = null;
+let pendingPatch = {};
+
+/* 合并 300ms 内的连续改动，避免拖动滑块刷爆接口 */
+function scheduleSettings(patch) {
+  Object.assign(pendingPatch, patch);
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(async () => {
+    const body = pendingPatch;
+    pendingPatch = {};
+    try {
+      await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      hint("设置未能同步到服务端");
+    }
+  }, 300);
+}
+
+$("conf").addEventListener("input", (e) => {
+  const value = parseFloat(e.target.value);
+  $("conf-val").textContent = value.toFixed(2);
+  scheduleSettings({ conf: value });
+});
+
+/* ---------- 通道开关（F-29：状态在服务器会话内保持） ---------- */
+function syncSwitches() {
+  $("ch-web").checked = channels.web;
+  $("ch-device").checked = channels.device;
+}
+
+async function pushChannels(patch) {
+  Object.assign(channels, patch);
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channels }),
+    });
+    const data = await res.json();
+    channels = data.channels;
+  } catch (err) {
+    hint("通道开关未能同步到服务端");
+  }
+  syncSwitches();
+}
+
+$("ch-web").addEventListener("change", (e) => pushChannels({ web: e.target.checked }));
+$("ch-device").addEventListener("change", (e) => pushChannels({ device: e.target.checked }));
+
+/* ---------- 告警列表（F-34~F-36：倒序、高亮、点开看大图） ---------- */
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString("zh-CN", { hour12: false });
+}
+
+function renderAlert(alert, fresh) {
+  const li = document.createElement("li");
+  if (fresh) li.classList.add("fresh");
+  li.dataset.id = alert.id;
+
+  const img = document.createElement("img");
+  if (alert.snapshot_url) img.src = alert.snapshot_url + "?t=" + Date.now();
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const text = document.createElement("div");
+  text.className = "text";
+  text.textContent = alert.text;
+  const time = document.createElement("div");
+  time.className = "time";
+  time.textContent = fmtTime(alert.ts);
+  meta.append(text, time);
+  li.append(img, meta);
+
+  li.addEventListener("click", () => {
+    if (!alert.snapshot_url) return;
+    $("modal-img").src = alert.snapshot_url;
+    $("modal").classList.add("show");
+  });
+  return li;
+}
+
+function setAlertCount(n) {
+  $("alert-count").textContent = n + " 条";
+  $("s-alerts").textContent = n;
+}
+
+function addAlert(alert, fresh) {
+  const empty = listEl.querySelector(".empty");
+  if (empty) empty.remove();
+  listEl.prepend(renderAlert(alert, fresh));
+  while (listEl.children.length > 50) listEl.lastElementChild.remove();
+  setAlertCount(listEl.children.length);
+}
+
+$("modal").addEventListener("click", () => $("modal").classList.remove("show"));
+
+async function loadAlerts() {
+  try {
+    const res = await fetch("/api/alerts?limit=50", { cache: "no-store" });
+    const alerts = await res.json();
+    listEl.innerHTML = "";
+    if (!alerts.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "暂无告警";
+      listEl.append(li);
+    } else {
+      alerts.forEach((a) => listEl.append(renderAlert(a, false)));
+    }
+    setAlertCount(alerts.length);
+  } catch (err) {
+    /* 状态轮询会提示服务不可达，这里不重复报错 */
+  }
+}
+
+/* ---------- WebSocket（F-27：告警实时下发并触发播放） ---------- */
+function connectWs() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(proto + "://" + location.host + "/ws/alerts");
+
+  ws.addEventListener("message", (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type !== "alert") return;
+    addAlert(msg.alert, true);
+    if (msg.play_web) playWeb(msg.alert);
+  });
+
+  ws.addEventListener("close", () => setTimeout(connectWs, 2000));
+  ws.addEventListener("error", () => ws.close());
+}
+
+/* ---------- 状态轮询 ---------- */
 async function poll() {
   try {
-    const res = await fetch("/status", { cache: "no-store" });
-    const { camera, stream, detector } = await res.json();
+    const res = await fetch("/api/status", { cache: "no-store" });
+    const { camera, stream, detector, channels: ch } = await res.json();
     const ok = stream.connected && stream.last_frame_age_s < 3;
 
     $("s-status").innerHTML =
@@ -98,7 +416,22 @@ async function poll() {
     $("s-note").textContent =
       (camera.fourcc || "格式未上报") + " · 检测 " +
       ((detector && detector.model) ? detector.model.split("/").pop() : "关闭") +
-      " · 白名单 " + ((detector && detector.classes) ? detector.classes.length : "全部") + " 类";
+      " · 白名单 " + ((detector && detector.classes) ? detector.classes.length : "全部") + " 类" +
+      (detector && detector.dwell_seconds ? " · 停留 " + detector.dwell_seconds + "s" : "");
+
+    if (ch) { channels = ch; syncSwitches(); }
+
+    if (detector && detector.class_options) {
+      if (!classOptions.length) classOptions = detector.class_options;
+      // 面板首次打开前同步服务端状态；打开后以本地勾选为准，避免轮询打断操作
+      if (!classPanelReady) {
+        selectedClasses = new Set(detector.classes || []);
+        if (detector.conf != null) {
+          $("conf").value = detector.conf;
+          $("conf-val").textContent = Number(detector.conf).toFixed(2);
+        }
+      }
+    }
 
     if (ok) placeholder.classList.add("hidden");
     else placeholder.classList.remove("hidden");
@@ -107,6 +440,8 @@ async function poll() {
   }
 }
 
+loadAlerts();
+connectWs();
 poll();
 setInterval(poll, 1000);
 </script>

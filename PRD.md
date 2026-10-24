@@ -247,13 +247,14 @@ flowchart LR
 | 告警存储 | JSONL + 截图文件 | 无数据库，重启能读回，方便肉眼检查 | SQLite（对 50 条记录是过度设计） |
 | 部署 | 裸机 venv 为主，Docker 可选 | 容器里直通相机与声卡是最容易卡住的一环 | 仅 Docker（音频直通成本高） |
 
-### 7.3 模块划分（5 个文件，各自职责单一）
+### 7.3 模块划分（6 个文件，各自职责单一）
 
 | 文件 | 职责 | 对外暴露 |
 |---|---|---|
 | `camera.py` | 枚举设备、打开相机、读帧、格式自检 | `list_devices()`、`Camera.open()`、`Camera.read()` |
 | `detector.py` | YOLO 推理与跟踪、停留判定、画框 | `Detector.process(frame) -> Annotated`、`DwellTracker.update(tracks, now)` |
 | `tts.py` | 文案渲染、音频合成、双通道播放 | `speak(text, channels)` |
+| `alerts.py` | 告警记录落盘、截图保存与清理、列表查询 | `Alerts.create()`、`Alerts.list()`、`Alerts.snapshot_path()` |
 | `main.py` | 线程启动、帧缓存、HTTP/WS 路由、静态页挂载 | 应用入口 |
 | `config.yaml` | 全部可调参数 | — |
 
@@ -271,6 +272,18 @@ flowchart LR
 | POST | `/api/settings` | 修改白名单 / 通道开关 / 阈值 | JSON |
 | GET | `/audio/{name}.mp3` | 播报音频 | audio/mpeg |
 | WS | `/ws/alerts` | 实时推送告警与播放指令 | JSON 帧 |
+
+设置 JSON 结构（F-16 / F-17，字段可任选，省略即不改；全部即时生效，不重启）：
+
+```json
+{
+  "classes": [0, 15, 24],
+  "conf": 0.4,
+  "channels": { "web": true, "device": false }
+}
+```
+
+`classes` 为 COCO 类别编号数组，空数组表示全部类别；越界编号被忽略，非数字返回 400。`conf` 落在 0.01~0.99。
 
 告警 JSON 结构（契约，前端按此渲染）：
 

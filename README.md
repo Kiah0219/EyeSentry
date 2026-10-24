@@ -6,9 +6,9 @@
 
 ## 当前状态
 
-**M1 已完成**：相机采集 → YOLO 检测 → 画框（中文标签）→ MJPEG → 浏览器。页面顶部显示相机源、分辨率、实测帧率、当前目标数。
+**M2 已完成**：相机采集 → YOLO + ByteTrack → 画框（中文标签 + 每人已停留秒数）→ MJPEG → 浏览器；有人停留超过 5 秒，浏览器与本体喇叭同时中文播报，右侧出现带框截图的告警记录。
 
-接下来 M2 接入 ByteTrack 跟踪与「停留 5 秒」判定、TTS 双通道播报、告警列表。
+真机验收（A-03 帧率 / A-05 检测正确 / A-06 停留触发准确率）待在有相机的机器上完成。
 
 ## 快速开始
 
@@ -25,13 +25,24 @@ python main.py
 
 浏览器打开 `http://<本机IP>:8000`。Linux 上 RealSense 会暴露多个 `/dev/videoN`，认准 `check_camera.py` 里能出图的那个。
 
-首次启动会自动下载 `models/yolov8n.pt`（约 6 MB）。网络不通时手动下载同名文件放进 `models/` 即可。默认只检测配置里白名单的 9 类（人 / 背包 / 瓶子 / 杯子 / 椅子 / 笔记本 / 手机 / 书 / 时钟），改 `detector.classes` 增删，留空表示全部类别。
+首次启动会自动下载 `models/yolov8n.pt`（约 6 MB）。网络不通时手动下载同名文件放进 `models/` 即可。默认只检测配置里白名单的 10 类（人 / 猫 / 背包 / 瓶子 / 杯子 / 椅子 / 笔记本 / 手机 / 书 / 时钟），改 `detector.classes` 增删，留空表示全部类别。页面顶部的「检测类别」也能直接勾选，下一帧生效、不用重启；置信度阈值同理（拖动滑块），勾掉全部类别等于回到全量检测。
 
 macOS 首次运行需在「系统设置 → 隐私与安全性 → 相机」允许所用的终端应用；Linux 无需授权。另外 macOS 不支持指定像素格式与帧率，`config.yaml` 里的 `fourcc` 会被忽略、`fps` 由程序自行节流。
 
+**播报需要先点页面左上角的「点击解锁音频」**——浏览器的自动播放策略要求一次用户手势，不解锁时页面会明确提示，不会静默失败。本体喇叭在 macOS 用 `afplay`、Linux 用 `ffplay`（需装 ffmpeg）。
+
+停留阈值、冷却时长、丢失容忍都在 `config.yaml` 的 `dwell` 段；播报文案模板与音色在 `tts` 段（`{n}` 人数、`{dwell}` 阈值秒数）。
+
+接口：
+
 - `GET /` 页面
 - `GET /stream` MJPEG 流
-- `GET /status` 相机与帧流状态（JSON）
+- `GET /api/status` 相机、帧流、检测器与通道状态（JSON）
+- `GET /api/alerts?limit=50` 告警列表（倒序）
+- `GET /api/alerts/{id}/snapshot.jpg` 告警截图
+- `GET /audio/{id}.mp3` 播报音频
+- `POST /api/settings` 修改白名单 / 阈值 / 通道开关，如 `{"classes":[0,15],"conf":0.4,"channels":{"web":true}}`
+- `WS /ws/alerts` 实时推送告警
 
 ## 文档
 
@@ -54,7 +65,7 @@ macOS 首次运行需在「系统设置 → 隐私与安全性 → 相机」允�
 |---|---|
 | M0 | 相机枚举、MJPEG 出画 |
 | M1 | YOLO 检测、画框、中文标签 |
-| M2 | 停留判定、TTS 双通道、告警列表 |
+| M2 | ByteTrack 跟踪、停留判定、TTS 双通道、告警列表 |
 | M3 | Docker / systemd、文档、分享 |
 
 ## 设计要点

@@ -27,7 +27,7 @@ class Frame:
 
 
 class LocalStream(threading.Thread):
-    def __init__(self, camera, detector=None, jpeg_quality: int = 80, target_fps: float = 15, fps_window: int = 30):
+    def __init__(self, camera, detector=None, jpeg_quality: int = 80, target_fps: float = 15, fps_window: int = 30, on_event=None):
         super().__init__(name="local-stream", daemon=True)
         self._camera = camera
         self._detector = detector
@@ -43,6 +43,8 @@ class LocalStream(threading.Thread):
         self._seq = 0
         self._timestamps = []
         self._read_failures = 0
+        # 事件回调在采集线程里调用，实现方必须立刻返回（只入队），不能做 IO
+        self._on_event = on_event
 
     def run(self) -> None:
         for jpeg, boxes, width, height in self._produce():
@@ -83,6 +85,17 @@ class LocalStream(threading.Thread):
 
             if self._detector is not None:
                 annotated, boxes = self._detector.process(frame)
+                try:
+                    events = self._detector.update_dwell(boxes, time.monotonic())
+                except Exception:
+                    log.exception("停留判定异常，跳过本帧事件")
+                    events = []
+                if events and self._on_event is not None:
+                    for event in events:
+                        try:
+                            self._on_event(event, annotated)
+                        except Exception:
+                            log.exception("事件回调异常")
             else:
                 annotated, boxes = frame, []
 
