@@ -6,7 +6,27 @@
 
 ## 当前状态
 
-**文档阶段**：需求与方案已定稿，代码尚未开始。
+**M0 已完成**：相机采集 → MJPEG → 浏览器出画，页面顶部显示相机源、分辨率、实测帧率。
+接下来 M1 接入 YOLO 检测与画框。
+
+## 快速开始
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 1. 先看本机有哪些相机、哪个能出图
+python tools/check_camera.py
+
+# 2. 把建议的 source 填进 config.yaml，然后启动
+python main.py
+```
+
+浏览器打开 `http://<本机IP>:8000`。Linux 上 RealSense 会暴露多个 `/dev/videoN`，认准 `check_camera.py` 里能出图的那个。
+
+- `GET /` 页面
+- `GET /stream` MJPEG 流
+- `GET /status` 相机与帧流状态（JSON）
 
 ## 文档
 

@@ -1,0 +1,19 @@
+camera:
+  # Linux: 填设备路径，如 /dev/video4；macOS / Windows: 填序号，如 0
+  # 不确定填什么就先跑：python tools/check_camera.py
+  source: 0
+  width: 1280
+  height: 720
+  fps: 15
+  fourcc: MJPG
+
+server:
+  host: 0.0.0.0
+  port: 8000
+
+stream:
+  jpeg_quality: 80
+
+detector:
+  # 一期固定 python；二期插入 C++ 侧车时改为 cpp（见 PRD 7.8）
+  backend: python

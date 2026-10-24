@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EyeSentry</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0d1117; color: #e6edf3;
+    font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid #21262d; background: #161b22;
+  }
+  .brand { font-weight: 600; letter-spacing: .5px; }
+  .brand span { color: #7d8590; font-weight: 400; margin-left: 8px; font-size: 12px; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-left: auto; }
+  .stat { display: flex; flex-direction: column; min-width: 64px; }
+  .stat b { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat i { font-style: normal; font-size: 11px; color: #7d8590; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    margin-right: 6px; background: #7d8590; vertical-align: middle;
+  }
+  .dot.ok { background: #3fb950; box-shadow: 0 0 6px #3fb95088; }
+  .dot.bad { background: #f85149; }
+  main { padding: 18px; }
+  .stage {
+    position: relative; background: #000; border: 1px solid #21262d;
+    border-radius: 8px; overflow: hidden; max-width: 1280px; margin: 0 auto;
+    aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
+  }
+  .stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .placeholder {
+    position: absolute; color: #7d8590; text-align: center; padding: 0 24px;
+  }
+  .placeholder.hidden { display: none; }
+  footer {
+    max-width: 1280px; margin: 12px auto 0; color: #7d8590; font-size: 12px;
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">EyeSentry<span>M0 · 相机出画</span></div>
+  <div class="stats">
+    <div class="stat"><b id="s-status"><span class="dot"></span>—</b><i>状态</i></div>
+    <div class="stat"><b id="s-source">—</b><i>相机源</i></div>
+    <div class="stat"><b id="s-size">—</b><i>分辨率</i></div>
+    <div class="stat"><b id="s-fps">—</b><i>实测帧率</i></div>
+  </div>
+</header>
+
+<main>
+  <div class="stage">
+    <img id="video" alt="实时画面">
+    <div class="placeholder" id="placeholder">正在连接相机…</div>
+  </div>
+  <footer>
+    <span id="s-note">检测功能在 M1 接入</span>
+    <span id="s-seq">帧序号 —</span>
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $("video");
+const placeholder = $("placeholder");
+
+video.addEventListener("error", () => {
+  placeholder.textContent = "画面流中断，正在重试…";
+  placeholder.classList.remove("hidden");
+});
+
+function startVideo() {
+  video.src = "/stream?t=" + Date.now();
+}
+startVideo();
+
+async function poll() {
+  try {
+    const res = await fetch("/status", { cache: "no-store" });
+    const { camera, stream } = await res.json();
+    const ok = stream.connected && stream.last_frame_age_s < 3;
+
+    $("s-status").innerHTML =
+      '<span class="dot ' + (ok ? "ok" : "bad") + '"></span>' + (ok ? "运行中" : "无信号");
+    $("s-source").textContent = camera.source;
+    $("s-size").textContent = stream.width + "×" + stream.height;
+    $("s-fps").textContent = stream.fps.toFixed(1);
+    $("s-seq").textContent = "帧序号 " + stream.seq;
+    $("s-note").textContent =
+      camera.fourcc + " · 检测功能在 M1 接入";
+
+    if (ok) placeholder.classList.add("hidden");
+    else placeholder.classList.remove("hidden");
+  } catch (err) {
+    $("s-status").innerHTML = '<span class="dot bad"></span>服务不可达';
+  }
+}
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
