@@ -24,6 +24,7 @@ class Frame:
     ts: float
     width: int
     height: int
+    raw: object  # 相机原始 BGR 帧，不带任何绘制
 
 
 class LocalStream(threading.Thread):
@@ -43,17 +44,18 @@ class LocalStream(threading.Thread):
         self._seq = 0
         self._timestamps = []
         self._read_failures = 0
+        self._infer_failures = 0
         # 事件回调在采集线程里调用，实现方必须立刻返回（只入队），不能做 IO
         self._on_event = on_event
 
     def run(self) -> None:
-        for jpeg, boxes, width, height in self._produce():
+        for jpeg, boxes, width, height, raw in self._produce():
             now = time.time()
             with self._cond:
                 self._seq += 1
                 self._frame = Frame(
                     jpeg=jpeg, boxes=boxes, seq=self._seq, ts=now,
-                    width=width, height=height,
+                    width=width, height=height, raw=raw,
                 )
                 self._timestamps.append(now)
                 del self._timestamps[:-self._fps_window]
@@ -84,7 +86,18 @@ class LocalStream(threading.Thread):
                 self._read_failures = 0
 
             if self._detector is not None:
-                annotated, boxes = self._detector.process(frame)
+                try:
+                    annotated, boxes = self._detector.process(frame)
+                except Exception:
+                    # 单帧推理失败不能带走整个采集线程，否则画面会永久停在最后一帧
+                    self._infer_failures += 1
+                    if self._infer_failures in (1, 10) or self._infer_failures % 100 == 0:
+                        log.exception("推理异常，本帧按原始帧继续（连续 %d 次）", self._infer_failures)
+                    annotated, boxes = frame, []
+                else:
+                    if self._infer_failures:
+                        log.info("推理恢复，此前连续失败 %d 次", self._infer_failures)
+                        self._infer_failures = 0
                 try:
                     events = self._detector.update_dwell(boxes, time.monotonic())
                 except Exception:
@@ -99,14 +112,18 @@ class LocalStream(threading.Thread):
             else:
                 annotated, boxes = frame, []
 
-            ok, buf = cv2.imencode(
-                ".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
-            )
-            if not ok:
+            jpeg = self.encode_jpeg(annotated)
+            if jpeg is None:
                 log.warning("JPEG 编码失败，跳过该帧")
                 continue
             height, width = annotated.shape[:2]
-            yield buf.tobytes(), boxes, width, height
+            yield jpeg, boxes, width, height, frame
+
+    def encode_jpeg(self, image) -> bytes | None:
+        ok, buf = cv2.imencode(
+            ".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
+        )
+        return buf.tobytes() if ok else None
 
     def frames(self):
         last = -1
@@ -118,6 +135,11 @@ class LocalStream(threading.Thread):
                 last = self._seq
                 frame = self._frame
             yield frame
+
+    def latest(self):
+        """最近一帧（只读），供 /api/state 读取当前目标。"""
+        with self._cond:
+            return self._frame
 
     def stats(self) -> dict:
         with self._cond:

@@ -37,6 +37,5 @@ tts:
   voice: zh-CN-XiaoxiaoNeural
   # 可用变量：{n} 人数、{dwell} 阈值秒数
   template: "检测到{n}人停留超过{dwell}秒"
-  channels:
-    web: true
-    device: true
+  # 播报通道：device（本体喇叭，默认）/ web（浏览器）/ mute（静音）
+  channel: device

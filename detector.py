@@ -11,6 +11,7 @@ boxes 的字段就是二期 C++ 侧车的跨进程协议字段（PRD 7.8），�
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -130,6 +131,20 @@ class DwellTracker:
             return 0.0
         return now - self._first_seen[tid]
 
+    def state(self, now: float | None = None) -> list[dict]:
+        """仍在计时的目标及已停留秒数，供 /api/state 读取。"""
+        now = time.monotonic() if now is None else now
+        return [
+            {"tid": tid, "dwell_seconds": round(now - first, 1)}
+            for tid, first in self._first_seen.items()
+        ]
+
+    def reset(self) -> None:
+        """换相机后旧画面里的 ID 全部作废，不能接着原来的秒数继续算。"""
+        self._first_seen.clear()
+        self._last_seen.clear()
+        self._last_trigger.clear()
+
 
 def _find_font() -> str | None:
     for path in _FONT_CANDIDATES:
@@ -175,6 +190,9 @@ class PyDetector:
         self._conf = conf
         self._imgsz = imgsz
         self._classes = [int(c) for c in classes] if classes else None
+        self._enabled = True
+        # 开关与跟踪器重置来自请求线程，推理在采集线程：互相排斥才不会清掉正在用的 trackers
+        self._lock = threading.RLock()
 
         dwell = dwell or {}
         self.dwell = DwellTracker(
@@ -200,41 +218,67 @@ class PyDetector:
             "conf": self._conf,
             "imgsz": self._imgsz,
             "classes": self._classes,
+            "enabled": self._enabled,
             "labels": "chinese" if self._font_path else "english",
             "tracker": "bytetrack",
             "dwell_seconds": self.dwell.seconds,
         }
 
     def process(self, frame):
-        result = self._model.track(
-            frame,
-            conf=self._conf,
-            imgsz=self._imgsz,
-            classes=self._classes,
-            persist=True,
-            tracker="bytetrack.yaml",
-            verbose=False,
-        )[0]
+        with self._lock:
+            if not self._enabled:
+                return frame, []
+            result = self._model.track(
+                frame,
+                conf=self._conf,
+                imgsz=self._imgsz,
+                classes=self._classes,
+                persist=True,
+                tracker="bytetrack.yaml",
+                verbose=False,
+            )[0]
 
-        ids = result.boxes.id
-        boxes = []
-        for index, box in enumerate(result.boxes):
-            cls_id = int(box.cls.item())
-            x1, y1, x2, y2 = (float(v) for v in box.xyxy[0].tolist())
-            boxes.append(
-                Detection(
-                    cls=cls_id,
-                    name=name_of(cls_id, chinese=self._font_path is not None),
-                    conf=float(box.conf.item()),
-                    xyxy=(x1, y1, x2, y2),
-                    tid=int(ids[index].item()) if ids is not None else None,
+            ids = result.boxes.id
+            boxes = []
+            for index, box in enumerate(result.boxes):
+                cls_id = int(box.cls.item())
+                x1, y1, x2, y2 = (float(v) for v in box.xyxy[0].tolist())
+                boxes.append(
+                    Detection(
+                        cls=cls_id,
+                        name=name_of(cls_id, chinese=self._font_path is not None),
+                        conf=float(box.conf.item()),
+                        xyxy=(x1, y1, x2, y2),
+                        tid=int(ids[index].item()) if ids is not None else None,
+                    )
                 )
-            )
 
         return self._draw(frame, boxes), [b.as_dict() for b in boxes]
 
     def update_dwell(self, boxes, now: float | None = None) -> list[DwellEvent]:
-        return self.dwell.update(boxes, now if now is not None else time.monotonic())
+        with self._lock:
+            if not self._enabled:
+                return []
+            return self.dwell.update(boxes, now if now is not None else time.monotonic())
+
+    def set_enabled(self, enabled: bool) -> bool:
+        """暂停/恢复检测（F-48）。恢复时从头计时，不沿用暂停前的 ID 与秒数。"""
+        with self._lock:
+            self._enabled = bool(enabled)
+            self.reset_tracking()
+        log.info("检测已%s", "恢复" if self._enabled else "暂停")
+        return self._enabled
+
+    def reset_tracking(self) -> None:
+        """清掉 ByteTrack 的轨迹与停留计时，供相机切换 / 开关检测后重新开始计数。"""
+        with self._lock:
+            self.dwell.reset()
+            try:
+                self._model.predictor.trackers = []
+            except AttributeError:
+                # 还没跑过第一帧，没有 predictor/trackers，无需清理
+                pass
+        log.info("跟踪状态已重置")
 
     def set_classes(self, classes) -> list[int]:
         """热改白名单（F-16）。下一帧生效，不需要重启。"""
@@ -299,6 +343,8 @@ class PyDetector:
         return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
     def _draw_cv(self, frame, detections):
+        # 原始帧要留给 /api/snapshot.jpg?raw=1 与 /stream/raw，不能就地画
+        frame = frame.copy()
         now = time.monotonic()
         for det in detections:
             x1, y1, x2, y2 = (int(v) for v in det.xyxy)

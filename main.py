@@ -5,16 +5,19 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 from alerts import Alerts
-from camera import Camera, CameraError, CameraInfo
+from camera import Camera, CameraError, CameraInfo, list_sources
 from coco_labels import COCO_ZH
 from detector import DetectorError, DwellEvent, PyDetector
 from stream import LocalStream
@@ -23,11 +26,24 @@ from tts import TTS
 BASE_DIR = Path(__file__).resolve().parent
 BOUNDARY = "frame"
 CONFIG_PATH = BASE_DIR / "config.yaml"
+CHANNELS = ("device", "web", "mute")
+DEFAULT_CHANNEL = "device"
 
 
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
+
+
+def open_camera(source, cfg: dict) -> tuple[Camera, CameraInfo]:
+    camera = Camera(
+        source=source,
+        width=int(cfg.get("width", 1280)),
+        height=int(cfg.get("height", 720)),
+        fps=int(cfg.get("fps", 15)),
+        fourcc=str(cfg.get("fourcc", "MJPG")),
+    )
+    return camera, camera.open()
 
 
 @dataclass
@@ -38,11 +54,55 @@ class Runtime:
     detector: PyDetector | None
     tts: TTS
     alerts: Alerts
-    channels: dict = field(default_factory=lambda: {"web": True, "device": True})
+    channel: str = DEFAULT_CHANNEL
+    last_alert: dict | None = None
+    camera_cfg: dict = field(default_factory=dict)
+    default_source: object = 0
+    jpeg_quality: int = 80
+    target_fps: float = 15.0
     events: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=16))
     _clients: set = field(default_factory=set)
     _loop: asyncio.AbstractEventLoop | None = None
     _worker: threading.Thread | None = None
+    _switch_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    # ---- 相机热切换（F-06）：停流 → 关旧设备 → 开新设备 → 重启流 ----
+
+    def _start_stream(self) -> None:
+        self.stream = LocalStream(
+            self.camera,
+            detector=self.detector,
+            jpeg_quality=self.jpeg_quality,
+            target_fps=self.target_fps,
+            on_event=self.on_event,
+        )
+        self.stream.start()
+
+    def switch_camera(self, backend: str, source) -> CameraInfo:
+        if backend != "uvc":
+            raise CameraError(f"暂不支持 backend={backend}，一期只有 uvc（PRD F-47）")
+        with self._switch_lock:
+            old_info = self.info
+            old_stream = self.stream
+            old_stream.stop()
+            old_stream.join(timeout=3)
+            self.camera.close()
+            try:
+                camera, info = open_camera(source, self.camera_cfg)
+            except Exception as exc:
+                recovery = ""
+                try:
+                    self.camera, self.info = open_camera(old_info.source, self.camera_cfg)
+                    self._start_stream()
+                except Exception as again:
+                    recovery = f"；原相机也未能重新打开（{again}），请重启服务"
+                raise CameraError(f"切换失败：{exc}{recovery}") from exc
+            self.camera, self.info = camera, info
+            if self.detector is not None:
+                self.detector.reset_tracking()
+            self._start_stream()
+            logging.info("已切换相机：%s", info.as_dict())
+            return info
 
     # ---- 事件流水线：采集线程只入队，这里做合成、播报、落库、广播 ----
 
@@ -72,11 +132,11 @@ class Runtime:
         text = self.tts.text_for(event.people, event.dwell_seconds)
 
         audio = None
-        if self.channels["web"] or self.channels["device"]:
-            # F-26：一次触发只合成一次，两个通道共用同一个文件
+        if self.channel != "mute":
+            # F-26：一次触发只合成一次
             audio = self.tts.synthesize(text, alert_id)
 
-        if self.channels["device"]:
+        if self.channel == "device":
             if audio is not None:
                 self.tts.play_on_device(audio)
             else:
@@ -87,7 +147,8 @@ class Runtime:
             alert_id, frame, event.people, event.dwell_seconds, text,
             f"/audio/{audio_url}" if audio_url else None,
         )
-        self.broadcast({"type": "alert", "alert": record, "play_web": self.channels["web"]})
+        self.last_alert = record
+        self.broadcast({"type": "alert", "alert": record, "play_web": self.channel == "web"})
 
     # ---- WebSocket 广播：线程安全地投递给每个连接的队列 ----
 
@@ -125,14 +186,8 @@ class Runtime:
 
 def start_runtime(config: dict) -> Runtime:
     cam_cfg = config.get("camera", {})
-    camera = Camera(
-        source=cam_cfg.get("source", 0),
-        width=int(cam_cfg.get("width", 1280)),
-        height=int(cam_cfg.get("height", 720)),
-        fps=int(cam_cfg.get("fps", 15)),
-        fourcc=str(cam_cfg.get("fourcc", "MJPG")),
-    )
-    info = camera.open()
+    default_source = cam_cfg.get("source", 0)
+    camera, info = open_camera(default_source, cam_cfg)
     logging.info("相机已打开：%s", info.as_dict())
 
     detector = build_detector(config)
@@ -142,7 +197,11 @@ def start_runtime(config: dict) -> Runtime:
     tts = TTS(tts_cfg, data_dir / "audio")
     alerts = Alerts(data_dir)
 
-    channels = tts_cfg.get("channels", {})
+    channel = tts_cfg.get("channel", DEFAULT_CHANNEL)
+    if channel not in CHANNELS:
+        raise ValueError(
+            f"tts.channel 只能是 {' / '.join(CHANNELS)}，当前为 {channel!r}"
+        )
     runtime = Runtime(
         camera=camera,
         info=info,
@@ -150,19 +209,15 @@ def start_runtime(config: dict) -> Runtime:
         detector=detector,
         tts=tts,
         alerts=alerts,
-        channels={
-            "web": bool(channels.get("web", True)),
-            "device": bool(channels.get("device", True)),
-        },
-    )
-    runtime.stream = LocalStream(
-        camera,
-        detector=detector,
+        channel=channel,
+        # 回填最近一条落盘告警，重启后 /api/state 立刻有内容
+        last_alert=(alerts.list(limit=1) or [None])[0],
+        camera_cfg=dict(cam_cfg),
+        default_source=default_source,
         jpeg_quality=int(config.get("stream", {}).get("jpeg_quality", 80)),
         target_fps=float(cam_cfg.get("fps", 15)),
-        on_event=runtime.on_event,
     )
-    runtime.stream.start()
+    runtime._start_stream()
     runtime.start_worker()
     return runtime
 
@@ -218,13 +273,102 @@ def status(request: Request):
         det_summary["class_options"] = [
             {"id": index, "name": name} for index, name in enumerate(COCO_ZH)
         ]
+    camera = runtime.info.as_dict()
+    camera["default_source"] = str(runtime.default_source)
+    camera["is_default"] = str(runtime.info.source) == str(runtime.default_source)
     return JSONResponse(
         {
-            "camera": runtime.info.as_dict(),
+            "camera": camera,
             "stream": runtime.stream.stats(),
             "detector": det_summary,
-            "channels": runtime.channels,
+            "channel": runtime.channel,
             "alerts": len(runtime.alerts.list(limit=200)),
+        }
+    )
+
+
+@app.get("/api/cameras")
+def list_cameras(request: Request):
+    runtime: Runtime = request.app.state.runtime
+    items = list_sources(active_source=runtime.info.source)
+    return JSONResponse(
+        {
+            "default_source": str(runtime.default_source),
+            "current": {"backend": runtime.info.backend, "source": runtime.info.source},
+            "items": items,
+        }
+    )
+
+
+class CameraSwitchBody(BaseModel):
+    backend: str = "uvc"
+    source: int | str
+
+
+@app.post("/api/camera")
+def switch_camera(request: Request, body: CameraSwitchBody):
+    runtime: Runtime = request.app.state.runtime
+    try:
+        info = runtime.switch_camera(body.backend, body.source)
+    except CameraError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    return JSONResponse(
+        {
+            "camera": info.as_dict(),
+            "default_source": str(runtime.default_source),
+            "ok": True,
+        }
+    )
+
+
+@app.get("/api/snapshot.jpg")
+def snapshot(request: Request, raw: bool = False):
+    runtime: Runtime = request.app.state.runtime
+    frame = runtime.stream.latest()
+    if frame is None:
+        return JSONResponse({"detail": "还没有画面"}, status_code=503)
+    image = runtime.stream.encode_jpeg(frame.raw) if raw else frame.jpeg
+    if image is None:
+        return JSONResponse({"detail": "JPEG 编码失败"}, status_code=503)
+    return Response(
+        content=image,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Seq": str(frame.seq),
+            "X-Frame-Age-Ms": str(int((time.time() - frame.ts) * 1000)),
+        },
+    )
+
+
+@app.get("/api/state")
+def live_state(request: Request):
+    runtime: Runtime = request.app.state.runtime
+    frame = runtime.stream.latest()
+    dwell = {}
+    if runtime.detector is not None:
+        dwell = {t["tid"]: t["dwell_seconds"] for t in runtime.detector.dwell.state()}
+    targets = [
+        {
+            "tid": box.get("tid"),
+            "cls": box.get("cls"),
+            "name": box.get("name"),
+            "conf": box.get("conf"),
+            "xyxy": box.get("xyxy"),
+            "dwell_seconds": dwell.get(box.get("tid"), 0.0),
+        }
+        for box in (frame.boxes if frame else [])
+    ]
+    return JSONResponse(
+        {
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "frame_age_s": round(time.time() - frame.ts, 2) if frame else None,
+            "frame_seq": frame.seq if frame else None,
+            "snapshot_url": "/api/snapshot.jpg" if frame else None,
+            "raw_snapshot_url": "/api/snapshot.jpg?raw=1" if frame else None,
+            "people": sum(1 for t in targets if t["cls"] == 0),
+            "targets": targets,
+            "last_alert": runtime.last_alert,
         }
     )
 
@@ -261,12 +405,24 @@ async def update_settings(request: Request):
     runtime: Runtime = request.app.state.runtime
     body = await request.json()
 
-    channels = body.get("channels") or {}
-    for key in ("web", "device"):
-        if key in channels:
-            runtime.channels[key] = bool(channels[key])
-
     detector = runtime.detector
+    if "detect" in body:
+        if detector is None:
+            return JSONResponse(
+                {"detail": "检测器未启动（detector.backend: none），无法开关检测"},
+                status_code=400,
+            )
+        if not isinstance(body["detect"], bool):
+            return JSONResponse({"detail": "detect 必须是布尔值"}, status_code=400)
+
+    # 播报通道：取值校验在改任何状态之前，非法时整单不生效
+    channel = body.get("channel")
+    if channel is not None and channel not in CHANNELS:
+        return JSONResponse(
+            {"detail": f"channel 只能是 {' / '.join(CHANNELS)}"},
+            status_code=400,
+        )
+
     if detector is not None:
         if "classes" in body:
             raw = body["classes"] or []
@@ -281,12 +437,18 @@ async def update_settings(request: Request):
             except (TypeError, ValueError):
                 return JSONResponse({"detail": "conf 必须是数字"}, status_code=400)
             detector.set_conf(min(max(conf, 0.01), 0.99))
+        if "detect" in body:
+            detector.set_enabled(body["detect"])
+
+    if channel is not None:
+        runtime.channel = channel
 
     return JSONResponse(
         {
-            "channels": runtime.channels,
+            "channel": runtime.channel,
             "classes": detector.summary()["classes"] if detector else [],
             "conf": detector.summary()["conf"] if detector else None,
+            "enabled": detector.summary()["enabled"] if detector else None,
         }
     )
 
@@ -310,22 +472,41 @@ async def ws_alerts(websocket: WebSocket):
             pass
 
 
+def _mjpeg_chunk(jpeg: bytes) -> bytes:
+    return (
+        b"--" + BOUNDARY.encode() + b"\r\n"
+        b"Content-Type: image/jpeg\r\n"
+        b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+        + jpeg + b"\r\n"
+    )
+
+
+MJPEG_TYPE = f"multipart/x-mixed-replace; boundary={BOUNDARY}"
+
+
 @app.get("/stream")
 def video_stream(request: Request):
     stream: LocalStream = request.app.state.runtime.stream
 
     def gen():
         for frame in stream.frames():
-            yield (
-                b"--" + BOUNDARY.encode() + b"\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Content-Length: " + str(len(frame.jpeg)).encode() + b"\r\n\r\n"
-                + frame.jpeg + b"\r\n"
-            )
+            yield _mjpeg_chunk(frame.jpeg)
 
-    return StreamingResponse(
-        gen(), media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}"
-    )
+    return StreamingResponse(gen(), media_type=MJPEG_TYPE)
+
+
+@app.get("/stream/raw")
+def raw_video_stream(request: Request):
+    stream: LocalStream = request.app.state.runtime.stream
+
+    def gen():
+        # 只在有人看时编码，没客户端时这段代码不跑，不额外占 CPU
+        for frame in stream.frames():
+            jpeg = stream.encode_jpeg(frame.raw)
+            if jpeg is not None:
+                yield _mjpeg_chunk(jpeg)
+
+    return StreamingResponse(gen(), media_type=MJPEG_TYPE)
 
 
 def main() -> None:

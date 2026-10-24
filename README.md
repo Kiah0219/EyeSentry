@@ -2,11 +2,11 @@
 
 相机目标识别 · Web 推流 · 语音播报。
 
-摄像头画面在边缘设备（NVIDIA Orin）上做实时目标检测，带检测框的画面推到浏览器；当有人在同一位置停留超过 5 秒，浏览器与设备本体喇叭同时用中文语音提醒。
+摄像头画面在边缘设备（NVIDIA Orin）上做实时目标检测，带检测框的画面推到浏览器；当有人在同一位置停留超过 5 秒，按页面选择的通道（本体 / 网页 / 静音）用中文语音提醒。
 
 ## 当前状态
 
-**M2 已完成**：相机采集 → YOLO + ByteTrack → 画框（中文标签 + 每人已停留秒数）→ MJPEG → 浏览器；有人停留超过 5 秒，浏览器与本体喇叭同时中文播报，右侧出现带框截图的告警记录。
+**M2 已完成**：相机采集 → YOLO + ByteTrack → 画框（中文标签 + 每人已停留秒数）→ MJPEG → 浏览器；有人停留超过 5 秒时按当前播报通道（默认本体喇叭）中文播报，右侧出现带框截图的告警记录。
 
 真机验收（A-03 帧率 / A-05 检测正确 / A-06 停留触发准确率）待在有相机的机器上完成。
 
@@ -27,6 +27,12 @@ python main.py
 
 首次启动会自动下载 `models/yolov8n.pt`（约 6 MB）。网络不通时手动下载同名文件放进 `models/` 即可。默认只检测配置里白名单的 10 类（人 / 猫 / 背包 / 瓶子 / 杯子 / 椅子 / 笔记本 / 手机 / 书 / 时钟），改 `detector.classes` 增删，留空表示全部类别。页面顶部的「检测类别」也能直接勾选，下一帧生效、不用重启；置信度阈值同理（拖动滑块），勾掉全部类别等于回到全量检测。
 
+页面顶部的「相机设备」可以直接切本机摄像头（一期只支持 UVC）：切换后画面自动重建，断流时页面每 1.5 秒自动重连，不用刷新；切换失败会保留原来的相机并提示原因。切换只在本次运行内生效，重启服务回到 `config.yaml` 里的 `camera.source`。
+
+顶部的「目标检测」开关可以随时暂停推理：画面继续推流但不画框、不触发播报；恢复后跟踪 ID 与停留计时从头开始。`detector.backend: none` 时该开关置灰。
+
+顶部的「播报」下拉三选一：本体（默认）/ 网页 / 静音。通道由服务端保存，同一时间只有一路出声，页面切换只影响下一次触发的播报；状态在本次运行内保持，重启回到 `config.yaml` 的 `tts.channel`。
+
 ### 平台差异
 
 | 平台 | `camera.source` | 相机授权 | 格式 / 帧率 | 设备喇叭 |
@@ -35,19 +41,24 @@ python main.py
 | Linux / Orin | `/dev/videoN`，RealSense 会暴露多个节点，认准 `tools/check_camera.py` 里能出图的那个 | 无需 | 会设置 `fourcc` / `fps`，实际以设备上报为准，不符时启动日志有告警 | `ffplay`，需装 ffmpeg |
 | Windows | 序号，如 `0`（默认摄像头） | 首次要在「设置 → 隐私和安全性 → 相机」允许桌面应用访问 | 同 Linux | `ffplay`，需装 ffmpeg 并加入 PATH |
 
-**播报需要先点页面左上角的「点击解锁音频」**——浏览器的自动播放策略要求一次用户手势，不解锁时页面会明确提示，不会静默失败。设备喇叭要求系统里有 `afplay` 或 `ffplay`，找不到播放器时本体通道只打一条日志、页面通道不受影响；TTS 合成失败时才会退化成提示音。两条通道都不通时告警仍会入库。
+**播报通道选「网页」时，浏览器需要一次用户手势才允许出声**：页面在第一次点击或按键时会静默完成解锁（包括 Safari 对 `<audio>` 元素的限制），切到「网页」时也会再试一次；如果告警恰好在任何交互之前到达，页面会提示「网页播放需要先点一下页面」，不会静默失败。设备喇叭要求系统里有 `afplay` 或 `ffplay`，找不到播放器时本体通道只打一条日志；TTS 合成失败时才会退化成提示音。选「静音」或通道不通时告警仍会入库。
 
-停留阈值、冷却时长、丢失容忍都在 `config.yaml` 的 `dwell` 段；播报文案模板与音色在 `tts` 段（`{n}` 人数、`{dwell}` 阈值秒数）。
+停留阈值、冷却时长、丢失容忍都在 `config.yaml` 的 `dwell` 段；播报通道在 `tts.channel`（`device` / `web` / `mute`），文案模板与音色也在 `tts` 段（`{n}` 人数、`{dwell}` 阈值秒数）。
 
 接口：
 
 - `GET /` 页面
-- `GET /stream` MJPEG 流
+- `GET /stream` MJPEG 流（带检测框）
+- `GET /stream/raw` MJPEG 流（原始画面，不带框，只在有人看时编码）
+- `GET /api/snapshot.jpg` 当前帧快照，加 `?raw=1` 拿不带框的原始帧
 - `GET /api/status` 相机、帧流、检测器与通道状态（JSON）
+- `GET /api/cameras` 本机可用的相机列表（含默认源与当前源）
+- `POST /api/camera` 切换相机，如 `{"backend":"uvc","source":"1"}`；失败返回 409 并保留原相机
+- `GET /api/state` 当前目标、已停留秒数、最近一条告警（JSON，给同机脚本轮询用）
 - `GET /api/alerts?limit=50` 告警列表（倒序）
 - `GET /api/alerts/{id}/snapshot.jpg` 告警截图
 - `GET /audio/{id}.mp3` 播报音频
-- `POST /api/settings` 修改白名单 / 阈值 / 通道开关，如 `{"classes":[0,15],"conf":0.4,"channels":{"web":true}}`
+- `POST /api/settings` 修改白名单 / 阈值 / 检测开关 / 播报通道，如 `{"classes":[0,15],"conf":0.4,"detect":true,"channel":"web"}`；`channel` 只接受 `device` / `web` / `mute`，其他值返回 400
 - `WS /ws/alerts` 实时推送告警
 
 ## 文档
@@ -55,13 +66,14 @@ python main.py
 | 文档 | 内容 |
 |---|---|
 | [PRD.md](./PRD.md) | 需求、用户故事、技术方案、验收标准、里程碑、风险 |
-| [GLOSSARY.md](./GLOSSARY.md) | 领域术语（停留事件、帧包、TTS 通道等） |
+| [GLOSSARY.md](./GLOSSARY.md) | 领域术语（停留事件、帧包、播报通道等） |
+| [docs/issues/](./docs/issues/) | 审计发现的问题台账（代码 bug / 风险） |
 | [docs/cpp-sidecar-plan.md](./docs/cpp-sidecar-plan.md) | 二期 C++ 侧车的模块与函数清单 |
 | [docs/adr/](./docs/adr/) | 架构决策记录 |
 
 ## 计划技术栈
 
-- **一期（Python）**：OpenCV 采集 → Ultralytics YOLOv8n + ByteTrack → FastAPI 输出 MJPEG → edge-tts 双通道播报
+- **一期（Python）**：OpenCV 采集 → Ultralytics YOLOv8n + ByteTrack → FastAPI 输出 MJPEG → edge-tts 播报（本体 / 网页 / 静音三选一）
 - **前端**：单个 HTML + 原生 JS，无构建步骤
 - **二期（可选）**：C++ 侧车接管采集与 TensorRT 推理，Python 侧仅做 Web、事件与播报；深度显示、GMSL、WebRTC
 
@@ -71,7 +83,7 @@ python main.py
 |---|---|
 | M0 | 相机枚举、MJPEG 出画 |
 | M1 | YOLO 检测、画框、中文标签 |
-| M2 | ByteTrack 跟踪、停留判定、TTS 双通道、告警列表 |
+| M2 | ByteTrack 跟踪、停留判定、TTS 播报通道、告警列表 |
 | M3 | Docker / systemd、文档、分享 |
 
 ## 设计要点

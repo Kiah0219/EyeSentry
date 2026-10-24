@@ -30,13 +30,15 @@
   .controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #c9d1d9; cursor: pointer; }
   .switch input { accent-color: #3fb950; }
+  .controls select {
+    font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px;
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+  }
   button {
     font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
     background: #21262d; color: #e6edf3; border: 1px solid #30363d;
   }
   button:hover { background: #30363d; }
-  button.armed { background: #1f6feb; border-color: #1f6feb; }
-  button.warn { background: #9e6a03; border-color: #bb8009; }
   main {
     padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px;
     align-items: start;
@@ -92,6 +94,15 @@
   #class-grid label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #c9d1d9; cursor: pointer; }
   #class-grid input { accent-color: #3fb950; }
   #class-grid .zh { color: #7d8590; font-size: 11px; }
+  #cameras {
+    display: none; padding: 12px 18px; border-bottom: 1px solid #21262d; background: #12171d;
+  }
+  #cameras.show { display: block; }
+  #cameras .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #cameras select {
+    font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px;
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+  }
   #hint {
     position: fixed; left: 50%; transform: translateX(-50%); bottom: 22px;
     background: #9e6a03; color: #fff; padding: 8px 16px; border-radius: 6px;
@@ -108,10 +119,16 @@
 <header>
   <div class="brand">EyeSentry<span>M2 · 停留播报</span></div>
   <div class="controls">
-    <button id="unlock" class="warn">点击解锁音频</button>
+    <button id="toggle-camera">相机设备</button>
     <button id="toggle-classes">检测类别</button>
-    <label class="switch"><input type="checkbox" id="ch-web" checked>网页播报</label>
-    <label class="switch"><input type="checkbox" id="ch-device" checked>本体播报</label>
+    <label class="switch"><input type="checkbox" id="ch-detect" checked>目标检测</label>
+    <label class="switch">播报
+      <select id="ch-mode">
+        <option value="device">本体</option>
+        <option value="web">网页</option>
+        <option value="mute">静音</option>
+      </select>
+    </label>
   </div>
   <div class="stats">
     <div class="stat"><b id="s-status"><span class="dot"></span>—</b><i>状态</i></div>
@@ -122,6 +139,15 @@
     <div class="stat"><b id="s-alerts">—</b><i>告警</i></div>
   </div>
 </header>
+
+<div id="cameras">
+  <div class="row">
+    <strong style="font-size:12px">相机设备</strong>
+    <select id="camera-select"></select>
+    <button id="camera-apply">切换</button>
+    <span style="font-size:11px;color:#7d8590" id="camera-note">切换后画面会黑 1~2 秒，重启服务回到配置里的默认相机</span>
+  </div>
+</div>
 
 <div id="classes">
   <div class="row">
@@ -161,24 +187,123 @@ const video = $("video");
 const placeholder = $("placeholder");
 const listEl = $("alerts");
 let unlocked = false;
-let channels = { web: true, device: true };
+let channel = "device";
 
-/* ---------- 画面 ---------- */
+/* ---------- 画面（F-46：断流后自动重连，不刷新页面） ---------- */
 video.addEventListener("error", () => {
   placeholder.textContent = "画面流中断，正在重试…";
   placeholder.classList.remove("hidden");
+  clearTimeout(video._retry);
+  video._retry = setTimeout(startVideo, 1500);
 });
 
 function startVideo() {
+  clearTimeout(video._retry);
   video.src = "/stream?t=" + Date.now();
 }
 startVideo();
 
-/* ---------- 音频解锁（F-30：必须明确提示，不静默失败） ---------- */
+/* ---------- 相机设备（F-45：切换失败由后端回滚并回话） ---------- */
+let cameraItems = [];
+
+function cameraValue(item) {
+  return item.backend + ":" + item.source;
+}
+
+function renderCameras(data) {
+  const select = $("camera-select");
+  select.innerHTML = "";
+  (data.items || []).forEach((item) => {
+    const opt = document.createElement("option");
+    opt.value = cameraValue(item);
+    let label = item.name + "（" + item.source + "）";
+    if (item.backend !== "uvc") label += " · " + item.backend.toUpperCase();
+    if (String(item.source) === String(data.default_source)) label += " · 默认";
+    if (!item.available) label += " · 不可用";
+    opt.textContent = label;
+    opt.disabled = !item.available;
+    opt.selected = item.current;
+    select.append(opt);
+  });
+}
+
+async function loadCameras() {
+  try {
+    const res = await fetch("/api/cameras", { cache: "no-store" });
+    renderCameras(await res.json());
+  } catch (err) {
+    hint("读取相机列表失败");
+  }
+}
+
+$("toggle-camera").addEventListener("click", () => {
+  const panel = $("cameras");
+  panel.classList.toggle("show");
+  if (panel.classList.contains("show")) loadCameras();
+});
+
+$("camera-apply").addEventListener("click", async () => {
+  const value = $("camera-select").value;
+  if (!value) return;
+  const sep = value.indexOf(":");
+  const payload = { backend: value.slice(0, sep), source: value.slice(sep + 1) };
+  const btn = $("camera-apply");
+  btn.disabled = true;
+  btn.textContent = "切换中…";
+  try {
+    const res = await fetch("/api/camera", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      hint(data.detail || "切换失败");
+      return;
+    }
+    startVideo();
+    hint("已切换到相机 " + data.camera.source);
+  } catch (err) {
+    hint("切换请求失败：" + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "切换";
+    loadCameras();
+  }
+});
+
+/* ---------- 音频解锁（F-30：首次交互静默解锁，失败时明确提示） ----------
+   浏览器只允许在用户手势里取得播放许可，而告警随时到达；趁页面第一次
+   点击或按键，把 AudioContext 和 <audio> 元素都标记为已激活。 */
 const player = new Audio();
 let audioCtx = null;
+let unlocking = null;
 
-$("unlock").addEventListener("click", async () => {
+/* Safari 要求 <audio> 元素也在手势里播过一次，用 50ms 静音 WAV 预热 */
+function silentWavUrl() {
+  const rate = 8000, frames = Math.round(rate * 0.05);
+  const buf = new ArrayBuffer(44 + frames);
+  const view = new DataView(buf);
+  const tag = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  tag(0, "RIFF");
+  view.setUint32(4, 36 + frames, true);
+  tag(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  tag(36, "data");
+  view.setUint32(40, frames, true);
+  new Uint8Array(buf, 44).fill(128); // 8-bit PCM 的静音值
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+async function doUnlock() {
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") await audioCtx.resume();
@@ -188,15 +313,35 @@ $("unlock").addEventListener("click", async () => {
     osc.connect(gain).connect(audioCtx.destination);
     osc.start();
     osc.stop(audioCtx.currentTime + 0.05);
-    unlocked = true;
-    const btn = $("unlock");
-    btn.textContent = "音频已解锁";
-    btn.classList.remove("warn");
-    btn.classList.add("armed");
   } catch (err) {
-    hint("音频解锁失败：" + err.message);
+    return false;
   }
-});
+
+  const url = silentWavUrl();
+  try {
+    player.src = url;
+    await player.play();
+  } catch (err) {
+    /* 元素预热失败不拦 AudioContext 解锁，播放时再提示 */
+  }
+  // 预热音频本身是静音，无需 muted；若这期间真的来了告警则不要打断它
+  if (player.src === url) {
+    player.pause();
+    player.currentTime = 0;
+  }
+
+  unlocked = true;
+  return true;
+}
+
+function unlockAudio() {
+  if (unlocked) return Promise.resolve(true);
+  if (!unlocking) unlocking = doUnlock().finally(() => { unlocking = null; });
+  return unlocking;
+}
+
+document.addEventListener("pointerdown", () => unlockAudio(), { once: true });
+document.addEventListener("keydown", () => unlockAudio(), { once: true });
 
 function hint(text) {
   const el = $("hint");
@@ -207,8 +352,8 @@ function hint(text) {
 }
 
 function playWeb(alert) {
-  if (!channels.web) return;
-  if (!unlocked) { hint("音频未解锁，点左上角「点击解锁音频」"); return; }
+  if (channel !== "web") return;
+  if (!unlocked) { hint("网页播放需要先点一下页面"); return; }
   if (!alert.audio_url) {
     // F-32：合成失败时改用浏览器内置语音
     if ("speechSynthesis" in window) {
@@ -290,30 +435,76 @@ $("conf").addEventListener("input", (e) => {
   scheduleSettings({ conf: value });
 });
 
-/* ---------- 通道开关（F-29：状态在服务器会话内保持） ---------- */
-function syncSwitches() {
-  $("ch-web").checked = channels.web;
-  $("ch-device").checked = channels.device;
-}
+/* ---------- 检测开关（F-48：暂停推理，画面继续推流） ---------- */
+let detectBusy = false;
 
-async function pushChannels(patch) {
-  Object.assign(channels, patch);
+async function pushDetect(enabled) {
+  detectBusy = true;
   try {
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channels }),
+      body: JSON.stringify({ detect: enabled }),
     });
     const data = await res.json();
-    channels = data.channels;
+    if (!res.ok) {
+      hint(data.detail || "检测开关未能同步到服务端");
+      $("ch-detect").checked = !enabled;
+      return;
+    }
+    $("ch-detect").checked = data.enabled;
+    hint(data.enabled ? "检测已恢复，重新开始计时" : "检测已暂停，画面继续");
   } catch (err) {
-    hint("通道开关未能同步到服务端");
+    hint("检测开关未能同步到服务端");
+    $("ch-detect").checked = !enabled;
+  } finally {
+    detectBusy = false;
   }
-  syncSwitches();
 }
 
-$("ch-web").addEventListener("change", (e) => pushChannels({ web: e.target.checked }));
-$("ch-device").addEventListener("change", (e) => pushChannels({ device: e.target.checked }));
+$("ch-detect").addEventListener("change", (e) => pushDetect(e.target.checked));
+
+/* ---------- 播报通道（F-29：本体 / 网页 / 静音，单字段、服务端为唯一状态源） ---------- */
+let channelBusy = false;
+
+function syncMode() {
+  $("ch-mode").value = channel;
+}
+
+async function pushMode(mode) {
+  channelBusy = true;
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: mode }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      hint(data.detail || "播报通道未能同步到服务端");
+      syncMode();
+      return;
+    }
+    channel = data.channel;
+    syncMode();
+  } catch (err) {
+    hint("播报通道未能同步到服务端");
+    syncMode();
+  } finally {
+    channelBusy = false;
+  }
+}
+
+$("ch-mode").addEventListener("change", (e) => {
+  // 切到网页是一次用户手势，顺手完成解锁；失败在播放时也会再提示
+  if (e.target.value === "web" && !unlocked) {
+    unlockAudio().then((ok) => {
+      if (!ok) hint("音频解锁失败，网页播报可能没有声音");
+    });
+  }
+  pushMode(e.target.value);
+});
+syncMode();
 
 /* ---------- 告警列表（F-34~F-36：倒序、高亮、点开看大图） ---------- */
 function fmtTime(iso) {
@@ -403,23 +594,38 @@ function connectWs() {
 async function poll() {
   try {
     const res = await fetch("/api/status", { cache: "no-store" });
-    const { camera, stream, detector, channels: ch } = await res.json();
+    const { camera, stream, detector, channel: ch } = await res.json();
     const ok = stream.connected && stream.last_frame_age_s < 3;
 
     $("s-status").innerHTML =
       '<span class="dot ' + (ok ? "ok" : "bad") + '"></span>' + (ok ? "运行中" : "无信号");
-    $("s-source").textContent = camera.source;
+    $("s-source").textContent =
+      camera.source + (camera.is_default ? "（默认）" : "（默认 " + camera.default_source + "）");
     $("s-size").textContent = stream.width + "×" + stream.height;
     $("s-fps").textContent = stream.fps.toFixed(1);
     $("s-boxes").textContent = stream.boxes;
     $("s-seq").textContent = "帧序号 " + stream.seq;
+    const detectText = !detector || detector.backend === "none"
+      ? "关闭"
+      : detector.enabled === false
+        ? "已暂停"
+        : (detector.model ? detector.model.split("/").pop() : "开启");
     $("s-note").textContent =
-      (camera.fourcc || "格式未上报") + " · 检测 " +
-      ((detector && detector.model) ? detector.model.split("/").pop() : "关闭") +
+      (camera.fourcc || "格式未上报") + " · 检测 " + detectText +
       " · 白名单 " + ((detector && detector.classes) ? detector.classes.length : "全部") + " 类" +
       (detector && detector.dwell_seconds ? " · 停留 " + detector.dwell_seconds + "s" : "");
 
-    if (ch) { channels = ch; syncSwitches(); }
+    if (detector && detector.backend !== "none") {
+      $("ch-detect").disabled = false;
+      if (!detectBusy && typeof detector.enabled === "boolean") {
+        $("ch-detect").checked = detector.enabled;
+      }
+    } else {
+      $("ch-detect").disabled = true;
+      $("ch-detect").checked = false;
+    }
+
+    if (ch) { channel = ch; if (!channelBusy) syncMode(); }
 
     if (detector && detector.class_options) {
       if (!classOptions.length) classOptions = detector.class_options;

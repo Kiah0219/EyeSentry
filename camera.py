@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -26,9 +28,11 @@ class CameraInfo:
     height: int
     fps: float
     fourcc: str
+    backend: str = "uvc"
 
     def as_dict(self) -> dict:
         return {
+            "backend": self.backend,
             "source": self.source,
             "width": self.width,
             "height": self.height,
@@ -46,6 +50,67 @@ def _parse_source(raw):
     if text.startswith("/dev/"):
         return text, cv2.CAP_V4L2
     return text, cv2.CAP_ANY
+
+
+def _video_order(path: Path) -> int:
+    digits = "".join(ch for ch in path.name if ch.isdigit())
+    return int(digits) if digits else 0
+
+
+def probe_source(source) -> bool:
+    """试开一次并读一帧；用于非 Linux 平台的设备枚举。"""
+    cap = cv2.VideoCapture(*_parse_source(source))
+    try:
+        if not cap.isOpened():
+            return False
+        ok, frame = cap.read()
+        return bool(ok and frame is not None)
+    finally:
+        cap.release()
+
+
+def list_sources(active_source=None, probe_limit: int = 4) -> list[dict]:
+    """枚举可选采集设备（F-06）。
+
+    Linux 直接读 /dev/video*，用 sysfs 的名字，不打开设备——RealSense 的
+    深度 / 红外节点也能打开，试开反而容易误导。其他平台没有设备名接口，
+    只能按索引逐个试开，上限 probe_limit 个；正在使用的那个不重复打开。
+    """
+    active = None if active_source is None else str(active_source)
+    if sys.platform.startswith("linux"):
+        items = []
+        for path in sorted(Path("/dev").glob("video*"), key=_video_order):
+            try:
+                name = (Path("/sys/class/video4linux") / path.name / "name").read_text(
+                    encoding="utf-8"
+                ).strip()
+            except OSError:
+                name = ""
+            items.append(
+                {
+                    "backend": "uvc",
+                    "source": str(path),
+                    "name": name or path.name,
+                    "available": True,
+                    "current": str(path) == active,
+                }
+            )
+        return items
+
+    items = []
+    for index in range(probe_limit):
+        source = str(index)
+        is_active = source == active
+        items.append(
+            {
+                "backend": "uvc",
+                "source": source,
+                "name": f"相机 {index}",
+                "available": True if is_active else probe_source(index),
+                "current": is_active,
+            }
+        )
+    return items
 
 
 def _decode_fourcc(value: float) -> str:
