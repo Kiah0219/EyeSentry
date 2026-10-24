@@ -73,7 +73,7 @@ def build_detector(config: dict):
         )
     return PyDetector(
         model_path=BASE_DIR / str(det_cfg.get("model", "models/yolov8n.pt")),
-        conf=float(det_cfg.get("conf", 0.35)),
+        conf=float(det_cfg.get("conf", 0.4)),
         imgsz=int(det_cfg.get("imgsz", 640)),
         classes=det_cfg.get("classes"),
     )

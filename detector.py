@@ -80,7 +80,7 @@ def _ensure_model(model_path: Path) -> None:
 
 
 class PyDetector:
-    def __init__(self, model_path, conf: float = 0.35, imgsz: int = 640, classes=None):
+    def __init__(self, model_path, conf: float = 0.4, imgsz: int = 640, classes=None):
         model_path = Path(model_path)
         _ensure_model(model_path)
         try:
