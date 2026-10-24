@@ -27,9 +27,10 @@ class Frame:
 
 
 class LocalStream(threading.Thread):
-    def __init__(self, camera, jpeg_quality: int = 80, target_fps: float = 15, fps_window: int = 30):
+    def __init__(self, camera, detector=None, jpeg_quality: int = 80, target_fps: float = 15, fps_window: int = 30):
         super().__init__(name="local-stream", daemon=True)
         self._camera = camera
+        self._detector = detector
         self._jpeg_quality = jpeg_quality
         # macOS 的 AVFoundation 不支持设帧率，设备按 30fps 交付；
         # 不在这里节流会把带宽翻倍，所以按配置值自己控节奏
@@ -67,7 +68,6 @@ class LocalStream(threading.Thread):
             self._next_tick = now + self._interval
 
     def _produce(self):
-        # M1 起在这里插入 detector.process(frame)，产出形状保持不变
         while not self._stop.is_set():
             self._pace()
             frame = self._camera.read()
@@ -81,14 +81,19 @@ class LocalStream(threading.Thread):
                 log.info("读帧恢复，此前连续失败 %d 次", self._read_failures)
                 self._read_failures = 0
 
+            if self._detector is not None:
+                annotated, boxes = self._detector.process(frame)
+            else:
+                annotated, boxes = frame, []
+
             ok, buf = cv2.imencode(
-                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
+                ".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
             )
             if not ok:
                 log.warning("JPEG 编码失败，跳过该帧")
                 continue
-            height, width = frame.shape[:2]
-            yield buf.tobytes(), [], width, height
+            height, width = annotated.shape[:2]
+            yield buf.tobytes(), boxes, width, height
 
     def frames(self):
         last = -1

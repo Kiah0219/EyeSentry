@@ -52,6 +52,7 @@
     <div class="stat"><b id="s-source">—</b><i>相机源</i></div>
     <div class="stat"><b id="s-size">—</b><i>分辨率</i></div>
     <div class="stat"><b id="s-fps">—</b><i>实测帧率</i></div>
+    <div class="stat"><b id="s-boxes">—</b><i>目标</i></div>
   </div>
 </header>
 
@@ -84,7 +85,7 @@ startVideo();
 async function poll() {
   try {
     const res = await fetch("/status", { cache: "no-store" });
-    const { camera, stream } = await res.json();
+    const { camera, stream, detector } = await res.json();
     const ok = stream.connected && stream.last_frame_age_s < 3;
 
     $("s-status").innerHTML =
@@ -92,9 +93,12 @@ async function poll() {
     $("s-source").textContent = camera.source;
     $("s-size").textContent = stream.width + "×" + stream.height;
     $("s-fps").textContent = stream.fps.toFixed(1);
+    $("s-boxes").textContent = stream.boxes;
     $("s-seq").textContent = "帧序号 " + stream.seq;
     $("s-note").textContent =
-      (camera.fourcc || "格式未上报") + " · 检测功能在 M1 接入";
+      (camera.fourcc || "格式未上报") + " · 检测 " +
+      ((detector && detector.model) ? detector.model.split("/").pop() : "关闭") +
+      " · 白名单 " + ((detector && detector.classes) ? detector.classes.length : "全部") + " 类";
 
     if (ok) placeholder.classList.add("hidden");
     else placeholder.classList.remove("hidden");

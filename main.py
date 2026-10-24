@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from camera import Camera, CameraError, CameraInfo
+from detector import DetectorError, PyDetector
 from stream import LocalStream
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,6 +29,7 @@ class Runtime:
     camera: Camera
     info: CameraInfo
     stream: LocalStream
+    detector: PyDetector | None = None
 
     def stop(self) -> None:
         self.stream.stop()
@@ -47,13 +49,34 @@ def start_runtime(config: dict) -> Runtime:
     info = camera.open()
     logging.info("相机已打开：%s", info.as_dict())
 
+    detector = build_detector(config)
+
     stream = LocalStream(
         camera,
+        detector=detector,
         jpeg_quality=int(config.get("stream", {}).get("jpeg_quality", 80)),
         target_fps=float(cam_cfg.get("fps", 15)),
     )
     stream.start()
-    return Runtime(camera=camera, info=info, stream=stream)
+    return Runtime(camera=camera, info=info, stream=stream, detector=detector)
+
+
+def build_detector(config: dict):
+    det_cfg = config.get("detector", {})
+    backend = str(det_cfg.get("backend", "python"))
+    if backend == "none":
+        logging.info("检测已关闭（detector.backend: none）")
+        return None
+    if backend != "python":
+        raise SystemExit(
+            f"暂不支持 detector.backend={backend}；C++ 侧车在二期，当前请用 python 或 none"
+        )
+    return PyDetector(
+        model_path=BASE_DIR / str(det_cfg.get("model", "models/yolov8n.pt")),
+        conf=float(det_cfg.get("conf", 0.35)),
+        imgsz=int(det_cfg.get("imgsz", 640)),
+        classes=det_cfg.get("classes"),
+    )
 
 
 @asynccontextmanager
@@ -83,7 +106,7 @@ def status(request: Request):
         {
             "camera": runtime.info.as_dict(),
             "stream": runtime.stream.stats(),
-            "detector": request.app.state.config.get("detector", {"backend": "python"}),
+            "detector": runtime.detector.summary() if runtime.detector else {"backend": "none"},
         }
     )
 
@@ -118,10 +141,10 @@ def main() -> None:
     config = load_config(Path(args.config))
     app.state.config = config
 
-    # 在 uvicorn 之前打开相机，启动失败时给人话而不是一屏栈
+    # 在 uvicorn 之前打开相机与模型，启动失败时给人话而不是一屏栈
     try:
         app.state.runtime = start_runtime(config)
-    except CameraError as exc:
+    except (CameraError, DetectorError) as exc:
         raise SystemExit(f"启动失败：{exc}") from exc
 
     server_cfg = config.get("server", {})
