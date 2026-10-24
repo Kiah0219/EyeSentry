@@ -37,9 +37,12 @@ def backend_for(source):
 
 
 def decode_fourcc(value: float) -> str:
+    """macOS 的 AVFoundation 不上报 FourCC，返回 0 或 0xFFFFFFFF，这里统一当未知。"""
     code = int(value)
+    if code <= 0:
+        return ""
     text = "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4))
-    return "".join(ch for ch in text if ch.isprintable()).strip() or "?"
+    return text if text.isascii() and text.isprintable() else ""
 
 
 def probe(source, size):
@@ -97,9 +100,11 @@ def main() -> int:
     for row in rows:
         w, h = row["size"]
         print(
-            f"{row['source']:<16}{row['fourcc']:<8}{f'{w}x{h}':<12}"
+            f"{row['source']:<16}{row['fourcc'] or '-':<8}{f'{w}x{h}':<12}"
             f"{row['fps']:<8.1f}{'是' if row['readable'] else '否'}"
         )
+    print()
+    print("「-」表示该平台不上报像素格式（macOS 常见），不影响出图。")
 
     usable = [r for r in rows if r["readable"] and min(r["size"]) >= 480]
     print()
@@ -110,7 +115,10 @@ def main() -> int:
         print(f"    source: {best['source']}")
         print(f"    width: {best['size'][0]}")
         print(f"    height: {best['size'][1]}")
-        print(f"    fourcc: {best['fourcc']}")
+        if best["fourcc"]:
+            print(f"    fourcc: {best['fourcc']}")
+        else:
+            print("    # fourcc 保持默认 MJPG，本平台不上报格式，设了也会被忽略")
         if len(usable) > 1:
             others = ", ".join(r["source"] for r in usable if r is not best)
             print(f"\n另有可用设备：{others}（想用就改 source）")

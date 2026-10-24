@@ -70,7 +70,10 @@ class Camera:
                 f"打不开相机源 {self.source!r}。先运行 python tools/check_camera.py 看可用设备。"
             )
 
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
+        if len(self.fourcc) == 4 and self.fourcc.isascii():
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
+        else:
+            log.warning("fourcc %r 不是 4 个 ASCII 字符，跳过设置，用设备默认格式", self.fourcc)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
@@ -97,6 +100,11 @@ class Camera:
             log.warning("实际格式 %s 与配置 %s 不符，帧率可能达不到预期", info.fourcc, self.fourcc)
         if not info.fourcc:
             log.warning("读不到像素格式，可能是驱动未正确上报，先看画面是否正常")
+        if info.fps > 0 and self.fps > 0 and abs(info.fps - self.fps) > max(1.0, self.fps * 0.2):
+            log.warning(
+                "实际帧率 %.0f 与配置 %d 不符，推流带宽会随之变化",
+                info.fps, self.fps,
+            )
 
     def read(self):
         if self._cap is None:

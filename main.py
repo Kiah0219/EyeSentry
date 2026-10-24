@@ -48,7 +48,9 @@ def start_runtime(config: dict) -> Runtime:
     logging.info("相机已打开：%s", info.as_dict())
 
     stream = LocalStream(
-        camera, jpeg_quality=int(config.get("stream", {}).get("jpeg_quality", 80))
+        camera,
+        jpeg_quality=int(config.get("stream", {}).get("jpeg_quality", 80)),
+        target_fps=float(cam_cfg.get("fps", 15)),
     )
     stream.start()
     return Runtime(camera=camera, info=info, stream=stream)

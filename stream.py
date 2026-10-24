@@ -27,10 +27,14 @@ class Frame:
 
 
 class LocalStream(threading.Thread):
-    def __init__(self, camera, jpeg_quality: int = 80, fps_window: int = 30):
+    def __init__(self, camera, jpeg_quality: int = 80, target_fps: float = 15, fps_window: int = 30):
         super().__init__(name="local-stream", daemon=True)
         self._camera = camera
         self._jpeg_quality = jpeg_quality
+        # macOS 的 AVFoundation 不支持设帧率，设备按 30fps 交付；
+        # 不在这里节流会把带宽翻倍，所以按配置值自己控节奏
+        self._interval = 1.0 / target_fps if target_fps > 0 else 0.0
+        self._next_tick = 0.0
         self._fps_window = fps_window
         self._stop = threading.Event()
         self._cond = threading.Condition()
@@ -52,9 +56,20 @@ class LocalStream(threading.Thread):
                 del self._timestamps[:-self._fps_window]
                 self._cond.notify_all()
 
+    def _pace(self) -> None:
+        if not self._interval:
+            return
+        now = time.monotonic()
+        if self._next_tick > now:
+            time.sleep(self._next_tick - now)
+            self._next_tick += self._interval
+        else:
+            self._next_tick = now + self._interval
+
     def _produce(self):
         # M1 起在这里插入 detector.process(frame)，产出形状保持不变
         while not self._stop.is_set():
+            self._pace()
             frame = self._camera.read()
             if frame is None:
                 self._read_failures += 1
