@@ -49,8 +49,12 @@ def _parse_source(raw):
 
 
 def _decode_fourcc(value: float) -> str:
+    """macOS 的 AVFoundation 不上报 FourCC，返回 0 或 0xFFFFFFFF，这里统一当未知。"""
     code = int(value)
-    return "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00")
+    if code <= 0:
+        return ""
+    text = "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4))
+    return text if text.isascii() and text.isprintable() else ""
 
 
 class Camera:

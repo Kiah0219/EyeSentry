@@ -94,7 +94,7 @@ async function poll() {
     $("s-fps").textContent = stream.fps.toFixed(1);
     $("s-seq").textContent = "帧序号 " + stream.seq;
     $("s-note").textContent =
-      camera.fourcc + " · 检测功能在 M1 接入";
+      (camera.fourcc || "格式未上报") + " · 检测功能在 M1 接入";
 
     if (ok) placeholder.classList.add("hidden");
     else placeholder.classList.remove("hidden");

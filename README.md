@@ -24,6 +24,8 @@ python main.py
 
 浏览器打开 `http://<本机IP>:8000`。Linux 上 RealSense 会暴露多个 `/dev/videoN`，认准 `check_camera.py` 里能出图的那个。
 
+macOS 首次运行需在「系统设置 → 隐私与安全性 → 相机」允许所用的终端应用；Linux 无需授权。另外 macOS 不支持指定像素格式与帧率，`config.yaml` 里的 `fourcc` 会被忽略、`fps` 由程序自行节流。
+
 - `GET /` 页面
 - `GET /stream` MJPEG 流
 - `GET /status` 相机与帧流状态（JSON）
