@@ -105,5 +105,7 @@
 | 14:09 | 按用户要求把 cuSPARSE Lt 的原理、软链理由与撤销命令补入 `docs/deploy-jetson.md` 第 3 步 | 新增 NEEDED 依赖、RUNPATH `$ORIGIN` 说明与 `ldd` 验证；补撤销步骤（删除软链 + 卸载轮子）。代码与服务未动 |
 | 14:11 | 切到 main 提交时发现 `docs/deploy-log.md` 残留 stash 冲突标记，且已进入本地提交 58390a7（未推送） | 切换分支时环境自动 stash/pop 引发冲突；`git reset --soft HEAD~1` 撤回该提交，改动全部保留 |
 | 14:12 | 解决冲突：保留 Stashed changes 一侧（13:48–14:09 记录完整），删除 3 行冲突标记 | `grep` 复查两个文档均无冲突标记；暂存区 2 文件、28 增 2 删 |
+| 14:12 | `git push origin main` | 成功：`88e2a94..cd1328c main -> main`；`dev` 仍停在 3aae75b，落后 main 一个文档提交；切换分支时产生的 `stash@{0}` 保留未删 |
+| 14:12 | 把以上过程追加到台账，单独提交并推送 | 保持 main 工作区干净；本条为本次最后一次记录提交 |
 
 <!-- 后续操作追加于此 -->
