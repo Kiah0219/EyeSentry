@@ -33,7 +33,11 @@ pip install "https://developer.download.nvidia.cn/compute/redist/jp/v61/pytorch/
 
 ## 3. 补 cuSPARSE Lt 并软链
 
-JetPack 6.2 上 torch 2.5 导入会报 `libcusparseLt.so.0: cannot open shared object file`。装 NVIDIA 的 cuSPARSE Lt 轮子，再把它链进 `torch/lib`（该目录已在 torch 的 RUNPATH 里，因此不需要设 `LD_LIBRARY_PATH`）：
+JetPack 6.2 上 torch 2.5 导入会报 `libcusparseLt.so.0: cannot open shared object file`。
+
+**为什么需要**：`libtorch_cuda.so` 的 `NEEDED` 里有 `libcusparseLt.so.0`（torch 的稀疏算子要用），但 JetPack 6.2 系统不提供这个库，NVIDIA 的 torch 轮子也没打包它、元数据里也没有声明。PyPI 的 `nvidia-cusparselt-cu12` 提供同 SONAME 的实现（0.7.1，下载约 284 MB，安装后 421 MB）。
+
+**为什么用软链而不是 `LD_LIBRARY_PATH`**：`libtorch_cuda.so` 的 RUNPATH 是 `$ORIGIN:/usr/local/cuda/lib64/stubs:/usr/local/cuda/lib64`，`$ORIGIN` 就是 `torch/lib`；而 pip 把库装在 `site-packages/nvidia/cusparselt/lib/`，不在任何搜索路径里。链进 `torch/lib` 就能被找到，且不必每次启动都设环境变量（nohup / systemd 都省事），也不重复占 421 MB。
 
 ```bash
 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple nvidia-cusparselt-cu12==0.7.1
@@ -45,9 +49,17 @@ ln -s ../../nvidia/cusparselt/lib/libcusparseLt.so.0 \
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+ldd .venv/lib/python3.10/site-packages/torch/lib/libtorch_cuda.so | grep -i cusparselt
 ```
 
-应输出 `2.5.0a0+872d972e41.nv24.8 True Orin`（轮子文件名是 `nv24.08`，pip 规范化后显示 `nv24.8`）。
+应输出 `2.5.0a0+872d972e41.nv24.8 True Orin`（轮子文件名是 `nv24.08`，pip 规范化后显示 `nv24.8`），`ldd` 那行解析到 `torch/lib/libcusparseLt.so.0`。
+
+撤销（撤销后 `import torch` 会重新报错，服务起不来；全部在 venv 内，不涉及系统目录）：
+
+```bash
+rm .venv/lib/python3.10/site-packages/torch/lib/libcusparseLt.so.0
+.venv/bin/pip uninstall -y nvidia-cusparselt-cu12
+```
 
 ## 4. 固定 NumPy 1.26
 

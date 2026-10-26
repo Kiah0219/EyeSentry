@@ -93,4 +93,17 @@
 | 13:44 | 用户问「这是最简单的方法吗」；检查 ultralytics NMS 选择逻辑与 Docker 条件 | `nms.py` 在 CUDA 张量上直接用 `torchvision.ops.nms`，无 try/except 回退；`autobackend.warmup` 无条件 `import torchvision` → 必须有能在 GPU 上算 NMS 的 torchvision；Docker 与 containerd 已装且免 sudo 可用 |
 | 13:46 | 测 Docker Hub 连通性：`curl registry-1.docker.io/v2/`、`docker manifest inspect ultralytics/ultralytics:latest-jetson-jetpack6` | 均超时（GitHub 受限的同时 Docker Hub 也不通），官方 Jetson 镜像路径在本机不可用；结论：源码编译仍是唯一可复现方案 |
 
+| 13:48 | 查看远端与分支 | `origin` 为 `git@github.com:Kiah0219/EyeSentry.git`；`main` 跟踪 `origin/main`；工作区 5 项改动待提交 |
+| 13:48 | 分两笔提交 | `939f8e9` fix：修复相机热切换黑屏（`stream.py`）+ 默认相机改彩色节点（`config.yaml`）；`88e2a94` docs：Jetson 部署文档与操作台账（`README.md` + 2 个 docs 文件） |
+| 13:49 | `git push origin main` | 成功：`95c14fb..88e2a94 main -> main`；SSH 加 10s 连接超时，一次通过 |
+| 13:49 | `git switch -c dev` | 本地 `dev` 分支，基于 `88e2a94`，未推远端 |
+| 13:49 | 在 dev 上启动服务 | PID 60921；`/dev/video4` 1280x720@15 YUYV；检测器就绪；uvicorn 监听 8000；本体通道仍因缺 ffplay 只打日志 |
+| 13:50 | 相机切换回归（dev 分支代码） | `/dev/video2` → HTTP 200、14.2 FPS；切回 `/dev/video4` → HTTP 200、15.0 FPS、1 个检测框；截图 `/tmp/snap_dev.jpg` 为彩色画面，中文标签「人 0.87 · 3.3s」 |
+
+| 14:05 | 用户询问 cuSPARSE Lt 与软链的原因及复现方式；复核 `readelf -d` / `ldd` | `libtorch_cuda.so` 的 NEEDED 含 `libcusparseLt.so.0`，RUNPATH 为 `$ORIGIN:/usr/local/cuda/lib64/stubs:/usr/local/cuda/lib64`；`ldd` 已通过 `torch/lib` 软链解析到 venv 内 421 MB 的实现。未做任何修改 |
+
+| 14:09 | 按用户要求把 cuSPARSE Lt 的原理、软链理由与撤销命令补入 `docs/deploy-jetson.md` 第 3 步 | 新增 NEEDED 依赖、RUNPATH `$ORIGIN` 说明与 `ldd` 验证；补撤销步骤（删除软链 + 卸载轮子）。代码与服务未动 |
+| 14:11 | 切到 main 提交时发现 `docs/deploy-log.md` 残留 stash 冲突标记，且已进入本地提交 58390a7（未推送） | 切换分支时环境自动 stash/pop 引发冲突；`git reset --soft HEAD~1` 撤回该提交，改动全部保留 |
+| 14:12 | 解决冲突：保留 Stashed changes 一侧（13:48–14:09 记录完整），删除 3 行冲突标记 | `grep` 复查两个文档均无冲突标记；暂存区 2 文件、28 增 2 删 |
+
 <!-- 后续操作追加于此 -->
