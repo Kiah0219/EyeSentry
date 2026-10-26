@@ -1,11 +1,11 @@
 camera:
   # Linux: 填设备路径，如 /dev/video4；macOS / Windows: 填序号，如 0
   # 不确定填什么就先跑：python tools/check_camera.py
-  source: 0
+  source: /dev/video4
   width: 1280
   height: 720
   fps: 15
-  fourcc: MJPG
+  fourcc: YUYV
 
 server:
   host: 0.0.0.0

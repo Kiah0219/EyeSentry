@@ -38,7 +38,7 @@ class LocalStream(threading.Thread):
         self._interval = 1.0 / target_fps if target_fps > 0 else 0.0
         self._next_tick = 0.0
         self._fps_window = fps_window
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._cond = threading.Condition()
         self._frame = None
         self._seq = 0
@@ -72,7 +72,7 @@ class LocalStream(threading.Thread):
             self._next_tick = now + self._interval
 
     def _produce(self):
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             self._pace()
             frame = self._camera.read()
             if frame is None:
@@ -127,7 +127,7 @@ class LocalStream(threading.Thread):
 
     def frames(self):
         last = -1
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             with self._cond:
                 self._cond.wait_for(lambda: self._seq != last, timeout=1.0)
                 if self._seq == last:
@@ -160,6 +160,6 @@ class LocalStream(threading.Thread):
             }
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
         with self._cond:
             self._cond.notify_all()
