@@ -25,7 +25,7 @@ python main.py
 
 浏览器打开 `http://<本机IP>:8000`。
 
-首次启动会自动下载 `models/yolov8n.pt`（约 6 MB）。网络不通时手动下载同名文件放进 `models/` 即可。默认只检测配置里白名单的 10 类（人 / 猫 / 背包 / 瓶子 / 杯子 / 椅子 / 笔记本 / 手机 / 书 / 时钟），改 `detector.classes` 增删，留空表示全部类别。页面顶部的「检测类别」也能直接勾选，下一帧生效、不用重启；置信度阈值同理（拖动滑块），勾掉全部类别等于回到全量检测。
+首次启动会自动下载 `models/yolov8n.pt`（约 6 MB）。网络不通时手动下载同名文件放进 `models/` 即可（GitHub 不通可用 `hf-mirror.com/Ultralytics/YOLOv8` 的同名文件）。默认只检测配置里白名单的 10 类（人 / 猫 / 背包 / 瓶子 / 杯子 / 椅子 / 笔记本 / 手机 / 书 / 时钟），改 `detector.classes` 增删，留空表示全部类别。页面顶部的「检测类别」也能直接勾选，下一帧生效、不用重启；置信度阈值同理（拖动滑块），勾掉全部类别等于回到全量检测。
 
 页面顶部的「相机设备」可以直接切本机摄像头（一期只支持 UVC）：切换后画面自动重建，断流时页面每 1.5 秒自动重连，不用刷新；切换失败会保留原来的相机并提示原因。切换只在本次运行内生效，重启服务回到 `config.yaml` 里的 `camera.source`。
 
@@ -33,12 +33,16 @@ python main.py
 
 顶部的「播报」下拉三选一：本体（默认）/ 网页 / 静音。通道由服务端保存，同一时间只有一路出声，页面切换只影响下一次触发的播报；状态在本次运行内保持，重启回到 `config.yaml` 的 `tts.channel`。
 
+### Jetson / Orin（CUDA）
+
+Orin 上不能照「快速开始」直接 `pip install -r requirements.txt`：PyPI 的 aarch64 torchvision 是 CPU 构建，jetson-ai-lab 索引上的 torch 又是 CUDA 13 构建，与本机驱动不匹配。按 [docs/deploy-jetson.md](./docs/deploy-jetson.md) 的顺序装：NVIDIA v61 的 torch 2.5 → 补 cuSPARSE Lt 并软链 → 固定 numpy 1.26 → 源码编译 torchvision 0.20（sm_87）→ 其余依赖。实测 JetPack 6.2 / CUDA 12.6。
+
 ### 平台差异
 
 | 平台 | `camera.source` | 相机授权 | 格式 / 帧率 | 设备喇叭 |
 |---|---|---|---|---|
 | macOS | 序号，如 `0` | 首次要在「系统设置 → 隐私与安全性 → 相机」允许所用的终端应用 | `fourcc` 被忽略，`fps` 由程序自行节流 | `afplay`（系统自带） |
-| Linux / Orin | `/dev/videoN`，RealSense 会暴露多个节点，认准 `tools/check_camera.py` 里能出图的那个 | 无需 | 会设置 `fourcc` / `fps`，实际以设备上报为准，不符时启动日志有告警 | `ffplay`，需装 ffmpeg |
+| Linux / Orin | `/dev/videoN`，RealSense 会暴露多个节点；`check_camera.py` 用 MJPG 探测会误推红外节点，认准能出彩色画面的那个（见 [docs/deploy-jetson.md](./docs/deploy-jetson.md#8-选对相机节点)） | 无需 | 会设置 `fourcc` / `fps`，实际以设备上报为准，不符时启动日志有告警 | `ffplay`，需装 ffmpeg |
 | Windows | 序号，如 `0`（默认摄像头） | 首次要在「设置 → 隐私和安全性 → 相机」允许桌面应用访问 | 同 Linux | `ffplay`，需装 ffmpeg 并加入 PATH |
 
 **播报通道选「网页」时，浏览器需要一次用户手势才允许出声**：页面在第一次点击或按键时会静默完成解锁（包括 Safari 对 `<audio>` 元素的限制），切到「网页」时也会再试一次；如果告警恰好在任何交互之前到达，页面会提示「网页播放需要先点一下页面」，不会静默失败。设备喇叭要求系统里有 `afplay` 或 `ffplay`，找不到播放器时本体通道只打一条日志；TTS 合成失败时才会退化成提示音。选「静音」或通道不通时告警仍会入库。
@@ -67,6 +71,7 @@ python main.py
 |---|---|
 | [PRD.md](./PRD.md) | 需求、用户故事、技术方案、验收标准、里程碑、风险 |
 | [GLOSSARY.md](./GLOSSARY.md) | 领域术语（停留事件、帧包、播报通道等） |
+| [docs/deploy-jetson.md](./docs/deploy-jetson.md) | Jetson Orin 依赖安装与启动（CUDA 版 torch / torchvision、相机节点、已知问题） |
 | [docs/issues/](./docs/issues/) | 审计发现的问题台账（代码 bug / 风险） |
 | [docs/cpp-sidecar-plan.md](./docs/cpp-sidecar-plan.md) | 二期 C++ 侧车的模块与函数清单 |
 | [docs/adr/](./docs/adr/) | 架构决策记录 |
