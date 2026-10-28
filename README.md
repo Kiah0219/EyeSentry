@@ -151,6 +151,22 @@ python main.py
 - `POST /api/settings` 修改白名单 / 阈值 / 检测开关 / 播报通道，如 `{"classes":[0,15],"conf":0.4,"detect":true,"channel":"web"}`；`channel` 只接受 `device` / `web` / `mute`，其他值返回 400
 - `WS /ws/alerts` 实时推送告警
 
+## 文件结构
+
+| 文件 | 职责 |
+|---|---|
+| `main.py` | CLI 入口：解析 `-c`、启动运行时、交给 uvicorn |
+| `web.py` | FastAPI 路由、WebSocket、MJPEG 输出 |
+| `runtime.py` | 相机、检测、事件流水线与播报编排；不依赖 FastAPI |
+| `camera.py` | UVC / HTTP 相机源 |
+| `stream.py` | 采集 → 推理 → 画框的帧流；上层只认 `frames()/latest()/stats()`，是换 C++ 侧车的边界 |
+| `detector.py` | YOLOv8 + ByteTrack + 停留判定 |
+| `tts.py` / `alerts.py` | 语音合成与告警落库 |
+| `settings.py` | 路径、常量、配置加载 |
+| `tools/yirt2_mjpeg_bridge.py` | cockpit yirt2 topic → 本地 MJPEG |
+
+依赖方向是 `main → web → runtime → camera / stream / detector / tts / alerts`。引入其他语言时优先替换 `stream` / `detector`（或让侧车输出同样的帧事件），`web.py` 与 `runtime.py` 的调用形状保持不变。
+
 ## 文档
 
 | 文档 | 内容 |

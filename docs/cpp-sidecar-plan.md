@@ -227,34 +227,36 @@ yolo export model=yolov8n.pt format=engine half=True imgsz=640
 
 ## 9. Python 侧要写的适配器（约 100 行）
 
-接缝在上层是**帧流**而非单帧：`LocalStream` 与 `SidecarStream` 产出同一个元组，上层 `for jpeg, boxes in stream` 两期不变。
+接缝在上层是**帧流**而非单帧：`web.py` / `runtime.py` 只依赖 `frames()`、`latest()`、`stats()`、`stop()`；`LocalStream` 与 `SidecarStream` 提供同名方法，两期上层不变。
 
 ```python
-class LocalStream:
-    """一期：相机与推理都在本进程，产出与侧车完全同构。"""
-    def __iter__(self):
-        while True:
-            frame = self.camera.read()
-            annotated, boxes = self.detector.process(frame)
-            yield jpeg_encode(annotated), boxes
+class LocalStream(threading.Thread):
+    """一期：相机与推理都在本进程。"""
+    def frames(self):       # yield Frame(jpeg, boxes, seq, ts, width, height, raw)
+        ...
+    def latest(self): ...
+    def stats(self): ...
 
 
-class SidecarStream:
-    """二期：相机归 C++，这里只收成品。上层对这一行无感。"""
+class SidecarStream(threading.Thread):
+    """二期：相机归 C++，这里只收成品。"""
     def __init__(self, exe: str, config: str, sock: str):
         self.proc = subprocess.Popen([exe, "--config", config])
         self.sock = connect_with_retry(sock)     # 侧车启动需要几十毫秒
 
-    def __iter__(self):
+    def frames(self):
         while True:
             msg = self._recv()                   # 阻塞读一条信封
-            yield msg.jpeg, msg.boxes
+            yield Frame(jpeg=msg.jpeg, boxes=msg.boxes, seq=..., ts=...,
+                        width=msg.w, height=msg.h, raw=None)
 
     def close(self):
         self.proc.terminate()
 ```
 
-上层只按 `detector.backend` 决定用哪个类，其余代码不动。**这正是「预留窗口」的全部内容：一个产出元组形状固定的生成器。**
+`raw` 只有 `LocalStream` 能提供；侧车接管相机后 `raw=None`，`/stream/raw` 与 `/api/snapshot.jpg?raw=1` 返回 503，其余接口不变。
+
+上层只按 `detector.backend` 决定用哪个类，其余代码不动。**这正是「预留窗口」的全部内容：一组方法名与 Frame 字段固定的帧流。**
 
 ---
 

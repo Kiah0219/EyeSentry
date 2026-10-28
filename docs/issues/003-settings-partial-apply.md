@@ -2,7 +2,7 @@
 
 - 严重度：P1
 - 状态：未修复
-- 范围：`main.py`
+- 范围：`web.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -11,7 +11,7 @@
 
 ## 位置
 
-[main.py:426](../../main.py#L426)：先校验并应用 `classes`，再校验 `conf`；`detect` 与 `channel` 的校验在更前面。
+[web.py:219](../../web.py#L219)：先校验并应用 `classes`，再校验 `conf`；`detect` 与 `channel` 的校验在更前面。
 
 ## 根因
 

@@ -2,7 +2,7 @@
 
 - 严重度：P2
 - 状态：未修复
-- 范围：`main.py`
+- 范围：`runtime.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -13,7 +13,7 @@
 
 ## 位置
 
-[main.py:135](../../main.py#L135)、[main.py:139](../../main.py#L139)、[main.py:151](../../main.py#L151)
+[runtime.py:120](../../runtime.py#L120)、[runtime.py:124](../../runtime.py#L124)、[runtime.py:136](../../runtime.py#L136)
 
 ## 建议修复
 

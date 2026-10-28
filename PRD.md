@@ -154,7 +154,7 @@
 | F-40 | P0 | 同一套代码在 Orin（Linux）、macOS、Windows 上运行，差异只在配置与音频播放命令 |
 | F-41 | P1 | 提供 Docker 方式在 Orin 上运行，容器内可用相机与声卡 |
 | F-42 | P1 | 提供 systemd 服务文件，开机自启、崩溃重启 |
-| F-43 | P1 | 上层只通过 `for jpeg, boxes in stream` 消费画面与检测结果，不直接调用相机与推理库；相机归属由 stream 内部决定（见 7.8） |
+| F-43 | P1 | 上层只通过 `stream.frames()/latest()/stats()` 消费画面与检测结果，不直接调用相机与推理库；相机归属由 stream 内部决定（见 7.8） |
 | F-44 | P2 | 提供 C++ 侧车实现，通过配置 `detector.backend: cpp` 切换，上层零改动 |
 
 ---
@@ -252,16 +252,22 @@ flowchart LR
 | 告警存储 | JSONL + 截图文件 | 无数据库，重启能读回，方便肉眼检查 | SQLite（对 50 条记录是过度设计） |
 | 部署 | 裸机 venv 为主，Docker 可选 | 容器里直通相机与声卡是最容易卡住的一环 | 仅 Docker（音频直通成本高） |
 
-### 7.3 模块划分（6 个文件，各自职责单一）
+### 7.3 模块划分（职责单一，按语言边界分层）
 
 | 文件 | 职责 | 对外暴露 |
 |---|---|---|
-| `camera.py` | 枚举设备、打开相机、读帧、格式自检 | `list_devices()`、`Camera.open()`、`Camera.read()` |
+| `main.py` | CLI 入口：解析 `-c`、启动运行时、交给 uvicorn | `python main.py` |
+| `web.py` | HTTP/WS 路由、MJPEG 输出、静态页挂载 | FastAPI `app` |
+| `runtime.py` | 相机、检测、事件流水线、播报编排；不依赖 FastAPI | `Runtime`、`start_runtime()` |
+| `camera.py` | 枚举设备、打开相机、读帧、格式自检 | `list_sources()`、`Camera.open()`、`Camera.read()` |
+| `stream.py` | 帧流：采集 → 推理 → 画框；上层只认 `frames()/latest()/stats()` | `LocalStream` |
 | `detector.py` | YOLO 推理与跟踪、停留判定、画框 | `Detector.process(frame) -> Annotated`、`DwellTracker.update(tracks, now)` |
 | `tts.py` | 文案渲染、音频合成、本体喇叭播放 | `text_for()` / `synthesize()` / `play_on_device()` |
 | `alerts.py` | 告警记录落盘、截图保存与清理、列表查询 | `Alerts.create()`、`Alerts.list()`、`Alerts.snapshot_path()` |
-| `main.py` | 线程启动、帧缓存、HTTP/WS 路由、静态页挂载 | 应用入口 |
+| `settings.py` | 路径、常量、配置加载 | `load_config()` |
 | `config.yaml` | 全部可调参数 | — |
+
+依赖方向是 `main → web → runtime → camera / stream / detector / tts / alerts`。`stream.py` 与 `detector.py` 是换语言时的接缝：C++ 侧车只要产出同样的帧与事件，`web.py` 与 `runtime.py` 不需要改。
 
 `static/index.html` 单文件承载页面，CSS/JS 内联。
 
@@ -487,9 +493,14 @@ docker run -d --name eyesentry \
 接缝是**两层**：上层只认外层，检测器实现者只认内层。
 
 ```python
-# 外层：上层唯一消费点。一期 LocalStream、二期 SidecarStream，产物完全同构
-for jpeg, boxes in stream:          # jpeg: bytes；boxes: list[dict]
-    ...
+# 外层：web.py / runtime.py 只依赖这些方法；一期 LocalStream、二期 SidecarStream 同构
+stream.frames() -> Iterator[Frame]   # Frame: jpeg / boxes / seq / ts / width / height / raw
+stream.latest() -> Frame | None
+stream.stats() -> dict
+stream.stop(); stream.join()
+
+# raw 与 encode_jpeg 只有 LocalStream 保证提供；侧车接管相机时 raw=None，
+# /stream/raw 与 /api/snapshot.jpg?raw=1 降级为 503
 
 # 内层：只是 LocalStream 的实现细节，上层碰不到
 detector.process(frame) -> (annotated_frame, boxes)

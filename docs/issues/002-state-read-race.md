@@ -2,7 +2,7 @@
 
 - 严重度：P1
 - 状态：未修复
-- 范围：`main.py`、`detector.py`
+- 范围：`web.py`、`detector.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -11,7 +11,7 @@
 
 ## 位置
 
-- 读取：[main.py:350](../../main.py#L350) 在 threadpool 里调用 `runtime.detector.dwell.state()`
+- 读取：[web.py:136](../../web.py#L136) 在 threadpool 里调用 `runtime.detector.dwell.state()`
 - 遍历：[detector.py:134](../../detector.py#L134) `state()` 直接遍历 `_first_seen.items()`
 - 写入：[detector.py:100](../../detector.py#L100) 采集线程同时增删同一个 dict（由 `PyDetector._lock` 保护）
 

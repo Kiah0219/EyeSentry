@@ -15,7 +15,7 @@
 
 - 计时入口：[detector.py:100](../../detector.py#L100) `DwellTracker.update()` 遍历全部 `boxes`
 - 人别判断只用于标签：[detector.py:308](../../detector.py#L308)
-- 人数统计已过滤：[main.py:369](../../main.py#L369)
+- 人数统计已过滤：[web.py:155](../../web.py#L155)
 - 契约缺口：PRD 7.5 伪代码同样没有类别过滤，F-19 写的是「同一跟踪 ID」而不是「同一个人」
 
 ## 根因

@@ -1,7 +1,7 @@
-"""帧流：把相机读帧与后续的推理封成一个产出固定形状的生成器。
+"""帧流：把相机读帧与后续的推理封成一个固定形状的帧流。
 
-上层只认 `for jpeg, boxes in stream`；一期 LocalStream、二期 SidecarStream 产出同构，
-切换 C++ 侧车时上层代码不动（见 PRD 7.8）。
+`web.py` / `runtime.py` 只依赖 `frames()`、`latest()`、`stats()`、`stop()`；
+二期 SidecarStream 提供同样的方法即可切换，不用改上层（见 PRD 7.8）。
 """
 
 from __future__ import annotations

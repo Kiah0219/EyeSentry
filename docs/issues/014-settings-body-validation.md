@@ -2,7 +2,7 @@
 
 - 严重度：P2
 - 状态：未修复
-- 范围：`main.py`
+- 范围：`web.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -16,7 +16,7 @@
 
 ## 位置
 
-[main.py:406](../../main.py#L406)：`body = await request.json()` 后直接按 dict 使用。
+[web.py:192](../../web.py#L192)：`body = await request.json()` 后直接按 dict 使用。
 
 ## 建议修复
 

@@ -2,7 +2,7 @@
 
 - 严重度：P2
 - 状态：未修复
-- 范围：`main.py`、`detector.py`
+- 范围：`web.py`、`detector.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -11,8 +11,8 @@
 
 ## 位置
 
-- 异步处理函数：[main.py:403](../../main.py#L403)
-- 调用 `set_enabled`：[main.py:441](../../main.py#L441)
+- 异步处理函数：[web.py:190](../../web.py#L190)
+- 调用 `set_enabled`：[web.py:227](../../web.py#L227)
 - 取锁并重置跟踪：[detector.py:264](../../detector.py#L264)
 
 ## 根因

@@ -2,7 +2,7 @@
 
 - 严重度：P1
 - 状态：未修复
-- 范围：`main.py`
+- 范围：`runtime.py`、`main.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -11,9 +11,9 @@
 
 ## 位置
 
-- 先开相机 / 起 TTS：[main.py:187](../../main.py#L187) `start_runtime()` 前半段
-- 才校验通道：[main.py:200](../../main.py#L200)
-- 只捕获两类异常：[main.py:527](../../main.py#L527) `except (CameraError, DetectorError)`
+- 先开相机 / 起 TTS：[runtime.py:175](../../runtime.py#L175) `start_runtime()` 前半段
+- 才校验通道：[runtime.py:184](../../runtime.py#L184)
+- 只捕获两类异常：[main.py:31](../../main.py#L31) `except (CameraError, DetectorError)`
 
 ## 根因
 

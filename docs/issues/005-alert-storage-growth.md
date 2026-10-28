@@ -2,7 +2,7 @@
 
 - 严重度：P1
 - 状态：未修复
-- 范围：`alerts.py`、`tts.py`、`main.py`
+- 范围：`alerts.py`、`tts.py`、`web.py`
 - 发现：2026-10-25 项目审计
 
 ## 现象
@@ -15,7 +15,7 @@
 
 - 全量读：[alerts.py:74](../../alerts.py#L74)
 - 只裁截图：[alerts.py:99](../../alerts.py#L99)
-- 每秒轮询：[main.py:285](../../main.py#L285)
+- 每秒轮询：[web.py:68](../../web.py#L68)
 - 音频落盘后无清理：[tts.py:70](../../tts.py#L70)
 
 ## 建议修复
