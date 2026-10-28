@@ -1,11 +1,12 @@
 camera:
   # Linux: 填设备路径，如 /dev/video4；macOS / Windows: 填序号，如 0
+  # HTTP MJPEG: 填 http://host:port/stream（如 tools/yirt2_mjpeg_bridge.py 桥接）
   # 不确定填什么就先跑：python tools/check_camera.py
-  source: /dev/video4
+  source: http://127.0.0.1:8092/stream
   width: 1280
   height: 720
   fps: 15
-  fourcc: YUYV
+  fourcc: ""
 
 server:
   host: 0.0.0.0
@@ -27,8 +28,9 @@ detector:
 dwell:
   # 同一跟踪 ID 连续存在多久算一次停留
   seconds: 5.0
-  # 触发后多久内不重复播报
-  cooldown_seconds: 30
+  # 触发后多久内不重复播报；冷却按跟踪 ID 记，Orbbec 画面里同一个人容易换 ID，
+  # 30 秒会退化成每几秒一报，这里放大到 120 秒
+  cooldown_seconds: 120
   # 目标短暂消失多久仍视为连续（抵抗单帧漏检）
   lost_tolerance_seconds: 2.0
 
@@ -39,3 +41,8 @@ tts:
   template: "检测到{n}人停留超过{dwell}秒"
   # 播报通道：device（本体喇叭，默认）/ web（浏览器）/ mute（静音）
   channel: device
+  # 本体播放输出：auto 跟随系统默认 sink（与语音对话容器一致）；也可填 sink 名前缀固定，
+  # 运行时匹配 pipewire 实际的 .N 后缀
+  sink: auto
+  # 应用侧音量 0~1，与系统 sink 音量相乘，留空用系统音量
+  volume: 0.6

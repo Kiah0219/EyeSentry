@@ -2,6 +2,8 @@
 .workbuddy/
 .venv/
 venv/
+.cache/
+.runtime/
 __pycache__/
 *.py[cod]
 .DS_Store

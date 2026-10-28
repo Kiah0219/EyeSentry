@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
+import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,16 +72,32 @@ def probe_source(source) -> bool:
         cap.release()
 
 
-def list_sources(active_source=None, probe_limit: int = 4) -> list[dict]:
+def _is_http(source) -> bool:
+    return isinstance(source, str) and source.startswith(("http://", "https://"))
+
+
+def list_sources(active_source=None, default_source=None, probe_limit: int = 4) -> list[dict]:
     """枚举可选采集设备（F-06）。
 
     Linux 直接读 /dev/video*，用 sysfs 的名字，不打开设备——RealSense 的
     深度 / 红外节点也能打开，试开反而容易误导。其他平台没有设备名接口，
     只能按索引逐个试开，上限 probe_limit 个；正在使用的那个不重复打开。
+    HTTP MJPEG 源不在设备枚举里，但当前或默认源是它时要列出来，否则切走就回不去。
     """
     active = None if active_source is None else str(active_source)
+    items = []
+    for source in (active, None if default_source is None else str(default_source)):
+        if _is_http(source) and all(item["source"] != source for item in items):
+            items.append(
+                {
+                    "backend": "http",
+                    "source": source,
+                    "name": "HTTP MJPEG",
+                    "available": True,
+                    "current": source == active,
+                }
+            )
     if sys.platform.startswith("linux"):
-        items = []
         for path in sorted(Path("/dev").glob("video*"), key=_video_order):
             try:
                 name = (Path("/sys/class/video4linux") / path.name / "name").read_text(
@@ -97,7 +116,6 @@ def list_sources(active_source=None, probe_limit: int = 4) -> list[dict]:
             )
         return items
 
-    items = []
     for index in range(probe_limit):
         source = str(index)
         is_active = source == active
@@ -122,6 +140,90 @@ def _decode_fourcc(value: float) -> str:
     return text if text.isascii() and text.isprintable() else ""
 
 
+class HttpMjpegCapture:
+    """MJPEG-over-HTTP 拉流，后台线程解析 multipart，逐帧 cv2.imdecode。
+
+    系统 OpenCV 可能没有 FFmpeg 后端，VideoCapture 打不开 http:// 源；
+    这里只依赖标准库和 OpenCV 的 JPEG 解码，不受编译选项影响。
+    """
+
+    def __init__(self, url: str, timeout: float = 5.0):
+        self.url = url
+        self.timeout = timeout
+        self._latest = None
+        self._seq = 0
+        self._read_seq = 0
+        self._cond = threading.Condition()
+        self._closed = threading.Event()
+        self._resp = None
+        self._thread = threading.Thread(target=self._run, name="http-mjpeg", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._closed.is_set():
+            try:
+                with urllib.request.urlopen(self.url, timeout=self.timeout) as resp:
+                    self._resp = resp
+                    buf = b""
+                    while not self._closed.is_set():
+                        chunk = resp.read(16384)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        while True:
+                            start = buf.find(b"\xff\xd8")
+                            if start < 0:
+                                buf = buf[-1:]
+                                break
+                            end = buf.find(b"\xff\xd9", start + 2)
+                            if end < 0:
+                                buf = buf[start:]
+                                break
+                            jpeg = buf[start:end + 2]
+                            buf = buf[end + 2:]
+                            frame = cv2.imdecode(
+                                np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR
+                            )
+                            if frame is None:
+                                continue
+                            with self._cond:
+                                self._latest = frame
+                                self._seq += 1
+                                self._cond.notify_all()
+            except Exception as exc:
+                if self._closed.is_set():
+                    return
+                log.warning("HTTP 相机流中断：%s，1 秒后重连", exc)
+                self._closed.wait(1.0)
+            finally:
+                self._resp = None
+
+    def read(self, timeout: float = 1.0):
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while self._seq == self._read_seq:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._cond.wait(remaining)
+            self._read_seq = self._seq
+            return self._latest
+
+    def release(self) -> None:
+        self._closed.set()
+        resp = self._resp
+        self._resp = None
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+
 class Camera:
     def __init__(self, source, width=1280, height=720, fps=15, fourcc="MJPG"):
         self.source = source
@@ -130,8 +232,12 @@ class Camera:
         self.fps = fps
         self.fourcc = fourcc
         self._cap = None
+        self._mjpeg = None
 
     def open(self) -> CameraInfo:
+        if _is_http(self.source):
+            return self._open_http()
+
         src, backend = _parse_source(self.source)
         cap = cv2.VideoCapture(src, backend)
         if not cap.isOpened():
@@ -159,6 +265,36 @@ class Camera:
         self._warn_on_mismatch(info)
         return info
 
+    def _open_http(self) -> CameraInfo:
+        capture = HttpMjpegCapture(str(self.source))
+        capture.start()
+        try:
+            frame = capture.read(timeout=5.0)
+        except Exception:
+            capture.release()
+            raise
+        if frame is None:
+            capture.release()
+            raise CameraError(
+                f"5 秒内没收到 HTTP 相机帧（{self.source}），确认桥接服务在运行（tools/yirt2_mjpeg_bridge.py）。"
+            )
+        self._mjpeg = capture
+        height, width = frame.shape[:2]
+        info = CameraInfo(
+            source=str(self.source),
+            width=width,
+            height=height,
+            fps=float(self.fps),
+            fourcc="JPEG",
+            backend="http",
+        )
+        if (width, height) != (self.width, self.height):
+            log.warning(
+                "HTTP 流实际分辨率 %dx%d 与配置 %dx%d 不符，继续运行",
+                width, height, self.width, self.height,
+            )
+        return info
+
     def _warn_on_mismatch(self, info: CameraInfo) -> None:
         if (info.width, info.height) != (self.width, self.height):
             log.warning(
@@ -176,6 +312,8 @@ class Camera:
             )
 
     def read(self):
+        if self._mjpeg is not None:
+            return self._mjpeg.read()
         if self._cap is None:
             return None
         ok, frame = self._cap.read()
@@ -184,6 +322,9 @@ class Camera:
         return frame
 
     def close(self) -> None:
+        if self._mjpeg is not None:
+            self._mjpeg.release()
+            self._mjpeg = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None

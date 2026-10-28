@@ -79,8 +79,8 @@ class Runtime:
         self.stream.start()
 
     def switch_camera(self, backend: str, source) -> CameraInfo:
-        if backend != "uvc":
-            raise CameraError(f"暂不支持 backend={backend}，一期只有 uvc（PRD F-47）")
+        if backend not in ("uvc", "http"):
+            raise CameraError(f"暂不支持 backend={backend}，可选 uvc 或 http（PRD F-47）")
         with self._switch_lock:
             old_info = self.info
             old_stream = self.stream
@@ -290,7 +290,10 @@ def status(request: Request):
 @app.get("/api/cameras")
 def list_cameras(request: Request):
     runtime: Runtime = request.app.state.runtime
-    items = list_sources(active_source=runtime.info.source)
+    items = list_sources(
+        active_source=runtime.info.source,
+        default_source=runtime.default_source,
+    )
     return JSONResponse(
         {
             "default_source": str(runtime.default_source),
@@ -536,6 +539,8 @@ def main() -> None:
             host=str(server_cfg.get("host", "0.0.0.0")),
             port=int(server_cfg.get("port", 8000)),
             log_level="info",
+            # 浏览器挂着 /stream 时 SIGTERM 会一直等后台任务结束，进程停不掉
+            timeout_graceful_shutdown=5,
         )
     finally:
         app.state.runtime.stop()
