@@ -270,18 +270,18 @@ class SidecarStream:
 
 ## 11. 如果二期同时要深度
 
-**先明确一点：深度本身不是上 C++ 的理由。** `pyrealsense2` 与 `pyorbbecsdk2` 都有 Jetson 的 aarch64 预编译 wheel，深度、D2C 对齐、伪彩都能在 Python 里做。
+**先明确一点：深度本身不是上 C++ 的理由。** 按相机分两条：有 cockpit 的机器（ABO1，奥比中光）彩色与深度都由 topic 提供，Python 或侧车订阅即可，不需要厂商 SDK；RealSense 不在 cockpit 托管范围，彩色可走 UVC，深度与 D2C 对齐仍需自行接 `pyrealsense2`（或 librealsense C++）。
 
-但如果侧车已经接管了相机，Python 就打不开同一台设备（设备独占），深度只能由侧车带出来。此时需要增加：
+如果没有 cockpit，侧车直接接管了相机，Python 就打不开同一台设备（设备独占），深度只能由侧车带出来。此时需要增加：
 
 | 改动 | 内容 | 增量 |
 |---|---|---|
-| 采集 | 换用 librealsense C++ API 或 Orbbec SDK C++ 取深度帧，并启用对齐 | +120 行 |
+| 采集 | RealSense 用 librealsense C++，奥比中光直连时用 Orbbec SDK C++ 取深度帧，并启用对齐 | +120 行 |
 | 上色 | 深度图套 colormap，编码成第二张 JPEG | +30 行 |
 | 协议 | JSON 增加 `depth_jpeg_len`，信封追加第二个 JPEG 块 | +20 行 |
 | 配置 | 深度开关、深度分辨率、colormap、裁剪范围 | +30 行 |
 
-合计 **+200~250 行、+2~3 天**。注意 GMSL 版 335Lg 还额外依赖解串板与 NVIDIA GMSL 驱动，这部分不在代码工作量里，属于硬件与驱动前置条件。
+合计 **+200~250 行、+2~3 天**。GMSL 版 335Lg 的解串板与驱动前置条件在 cockpit 机器上由 cockpit 承担，不算进本项目工作量。走 cockpit topic 时，侧车只需多订阅一路 depth topic（采集增量可省掉），但要先确认 cockpit 是否提供 C++ 版 yirt2 接口，否则仍由 Python 桥接转发。
 
 **信封扩展后**：
 
@@ -296,4 +296,4 @@ class SidecarStream:
 
 两张图在同一封信里，天然同帧，不需要另做时间戳匹配。
 
-**替代方案**：不上侧车，Python 全栈 + 厂商 SDK，深度与彩色同进程，对齐最省事。代价是保留 torch 依赖、性能上限低一些。取舍见 PRD 7.9。
+**替代方案**：奥比中光且有 cockpit 时直接订阅 color / depth 两个 topic，不装 SDK、不碰 GMSL；RealSense 没有 cockpit，二期深度只能自己接 `pyrealsense2`（不上侧车时）或 librealsense C++（上侧车时），取舍见 PRD 7.9。

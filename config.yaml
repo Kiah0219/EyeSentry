@@ -1,11 +1,15 @@
 camera:
-  # Linux: 填设备路径，如 /dev/video4；macOS / Windows: 填序号，如 0
-  # HTTP MJPEG: 填 http://host:port/stream（如 tools/yirt2_mjpeg_bridge.py 桥接）
+  # 换机器只改这一行（三台实测值）：
+  #   macOS 自带相机          -> 0
+  #   Orin + RealSense 彩色   -> /dev/video4（fourcc: YUYV）
+  #   ABO1 + cockpit / Orbbec -> http://127.0.0.1:8092/stream（fourcc: ""）
+  # 不方便改这里时可直接换配置：python main.py -c config.mac.yaml / config.orin.yaml
   # 不确定填什么就先跑：python tools/check_camera.py
   source: http://127.0.0.1:8092/stream
   width: 1280
   height: 720
   fps: 15
+  # 仅 UVC 生效；RealSense 填 YUYV，HTTP 源与 macOS 留空
   fourcc: ""
 
 server:

@@ -225,6 +225,7 @@
 - **yirt2 是 cockpit 自己的 Python 接口**：wheel 在 `/usr/share/cockpit-mid/wheels/yirt2-1.0.0-cp312-cp312-linux_aarch64.whl`（同目录还有 `rmw_fastdds`），装进项目 venv 即可，不碰系统 Python。用法是 `yirt2.ImageSubscriber().init(callback, topic, "/", yirt2.ImageSubscriberOptions())`，回调里的 `Image` 带 `.header`、`.info`（width/height/encoding/step）和原始 `.data` 字节。它内部用的正是补丁版 RMW，所以必须以 root 运行；root 下 `yirt2 topic hz` 稳定 29.5–30 Hz。
 - **桥接怎么转成 MJPEG**：`_on_image` 只保存最新帧并通知；独立编码线程按 `--fps`（15）取最新帧，把 rgb8 重排成 BGR（`np.frombuffer` → `reshape(height, step)` → 去掉行尾 padding），`cv2.imencode` 成 JPEG，再交给本地 HTTP 服务以 `multipart/x-mixed-replace` 输出 `/stream`，`/snapshot.jpg` 取最新一帧，`/status` 返回 `state/topic/frames/received/encoded/last_frame_age_s`。超过 `--stale-seconds`（10 秒）没有新帧就 `sub.shutdown()` 后重新 `init()`，相机重启或 cockpit 重载都能自愈。
 - **排查动作**：`yirt2 topic list`（有哪些 topic）、`yirt2 topic info /cockpit/camera/chest/main/color`（类型与 QoS）、`yirt2 topic hz …`（root 下确认真的有帧）、`curl 127.0.0.1:8092/status`（桥接自己的收发计数和最后一帧大小）。
+- **二期的深度按相机分两条**：奥比中光的深度同样从 cockpit 的 depth topic 取，不再计划自研 Orbbec SDK / GMSL 接入（只需确认 depth 的编码、是否已对齐以及内参来源）；RealSense 不在 cockpit 托管范围，深度与对齐仍需自行接 `pyrealsense2`。
 
 ## 2026-10-28（开发期部署方式：不用 Docker / systemd）
 

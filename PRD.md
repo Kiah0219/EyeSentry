@@ -51,7 +51,7 @@
 - 不做多路相机并发、不做多设备协同。
 - 不做视频存储与历史回放，只存告警截图。
 - 不做账号、权限、公网暴露。
-- 不做深度显示、不做 GMSL 接入（二期）。
+- 一期不做深度显示；二期奥比中光在 cockpit 机器上从 topic 取彩色与深度，不直接接 GMSL / Orbbec SDK；RealSense 仍自行接 pyrealsense2。
 - 不做手机推送、不做报表统计。
 
 ---
@@ -82,10 +82,10 @@
 | F-04 | P0 | 打开相机后校验实际分辨率与帧率，与配置不符时打印警告但继续运行 |
 | F-05 | P0 | Web 页面顶部显示当前相机源、实际分辨率、实际帧率（只读） |
 | F-06 | P1 | Web 页面下拉切换相机，切换时释放旧设备、打开新设备，允许 1~2 秒黑屏 |
-| F-07 | P2 | 支持 GMSL 接口的奥比中光 335Lg（需解串板） |
+| F-07 | P2 | 在 cockpit 管理的机器上通过 yirt2 topic 使用奥比中光 335Lg（彩色 + 深度），不直接接 GMSL / 厂商 SDK |
 | F-45 | P1 | 切换失败（设备被占用 / 不存在）时回滚到原相机并给出原因，不留下无画面状态 |
 | F-46 | P1 | 切换后浏览器画面自动重连，不需要手动刷新（F-09 的具体化） |
-| F-47 | P2 | 设备标识用 `(backend, id)`，为厂商 SDK 与深度相机预留；一期只有 `uvc` |
+| F-47 | P2 | 设备标识用 `(backend, id)`，为 HTTP / 厂商 SDK / 深度相机预留；当前有 `uvc` 与 `http` |
 
 > **关键认知（必须写进文档）**：一台 RealSense 会暴露 5~6 个 `/dev/videoX`，分别是深度、红外、彩色与元数据流，**不是多台相机**。彩色节点通常同时支持 `YUYV` 与 `MJPG`，其余节点是 `Z16` 或 `GREY`。用 `v4l2-ctl --list-formats-ext -d /dev/videoX` 逐个看即可确认。真正插了多台相机时，才存在「选哪一台」的问题。
 
@@ -241,14 +241,14 @@ flowchart LR
 
 | 环节 | 选择 | 理由 | 放弃的方案 |
 |---|---|---|---|
-| 相机读取 | OpenCV `VideoCapture`（UVC） | 三平台一套代码；RealSense 彩色流本身走 UVC；避开 Jetson 上编译 pyrealsense2 | pyrealsense2、Orbbec SDK（见 ADR-0001） |
+| 相机读取 | OpenCV `VideoCapture`（UVC）或 HTTP MJPEG | 三平台一套代码；RealSense 彩色流本身走 UVC；cockpit 托管的相机由 yirt2 桥接转 MJPEG，一期不碰厂商 SDK | pyrealsense2、Orbbec SDK（见 ADR-0001；RealSense 二期深度见 7.9） |
 | 检测 | Ultralytics YOLOv8n | 一条 `pip install` 可用，自带跟踪器与导出工具，教程最多 | YOLOv11n（生态略少）、RT-DETR（更重） |
 | 跟踪 | ByteTrack（Ultralytics 内置） | 零额外依赖，`model.track()` 直接拿到持久 ID | BoT-SORT（更准但参数更多）、自写 IoU 匹配（不稳） |
 | 推流 | MJPEG | 后端一行生成器、前端一个 `<img>`，无信令无编解码协商 | WebRTC（二期，见 ADR-0002）、HLS（延迟大）、RTSP-Web（需插件/转码） |
 | Web 后端 | FastAPI + uvicorn | 异步流式响应简单，自带接口文档 | Flask（流式需额外处理）、Django（过重） |
 | 前端 | 原生 HTML/CSS/JS 单文件 | 约 150 行，不引框架，改起来没有构建步骤 | React/Vue（增加构建链，对本项目无收益） |
 | TTS | edge-tts | 免费、中文自然、`pip install` 即用 | 云厂商 TTS（要密钥要计费）、Piper（完全离线但音质一般）、pyttsx3（中文机械音） |
-| 本体播放 | `ffplay -nodisp -autoexit` | 直接播 mp3，三平台一致（需装 ffmpeg） | aplay（仅 wav）、winsound（仅 Windows、仅 wav） |
+| 本体播放 | `afplay` / `ffplay` / `gst-launch-1.0` | 直接播 mp3，按平台回退；Jetson 通常没有 ffmpeg，用 GStreamer | aplay（仅 wav）、winsound（仅 Windows、仅 wav） |
 | 告警存储 | JSONL + 截图文件 | 无数据库，重启能读回，方便肉眼检查 | SQLite（对 50 条记录是过度设计） |
 | 部署 | 裸机 venv 为主，Docker 可选 | 容器里直通相机与声卡是最容易卡住的一环 | 仅 Docker（音频直通成本高） |
 
@@ -552,11 +552,14 @@ detector:
 
 **若坚持单二进制（不做侧车）**：需要把 WebSocket 服务端、TTS 调用、告警存储、音频播放全部用 C++ 重写，工期 4~6 周。除非目标机绝对不能装 Python，否则不建议。
 
-> **与深度的冲突**：同一台相机同一时刻只能被一个进程打开。一旦侧车接管相机，Python 就无法再用厂商 SDK 读深度，因此「上侧车」与「Python 直接读深度」互斥，取舍见 7.9。
+> **与深度的冲突**：同一台相机同一时刻只能被一个进程打开。一旦侧车直连相机，Python 就无法再用厂商 SDK 读深度，因此「上侧车」与「Python 直接读深度」互斥，取舍见 7.9。cockpit 机器上相机由 cockpit 持有，侧车与 Python 都只订 topic，不存在这个冲突。
 
 ### 7.9 深度接入（二期）与设备独占
 
-**先说结论：拿深度不需要写 C++。** 两个厂商的 Python 绑定都有 aarch64 预编译包，`pip` 即可安装（2026-10 核对）：
+**先说结论：拿深度不需要写 C++；奥比中光不需要厂商 SDK，RealSense 仍然需要自己接。** 分两种部署：
+
+1. **有 cockpit 的机器（ABO1，奥比中光）**：彩色与深度都由 cockpit 以 topic 发布（`/cockpit/camera/chest/main/color`、`.../depth`），EyeSentry 用 yirt2 订阅即可，不需要 `pyorbbecsdk`，也不需要自己接 GMSL。**待验证**：depth 的编码（如 16UC1）能否被现有 `ImageSubscriber` 路径解码、是否已做 D2C 对齐、内参是否随 topic 提供；对齐若未做，在 Python 里用 numpy / OpenCV 处理。
+2. **RealSense（Orin）及其他无 cockpit 的相机**：不在 cockpit 托管范围，彩色可继续走 UVC，深度与 D2C 对齐仍需自行接 `pyrealsense2`；奥比中光只有在没有 cockpit 时才需要 `pyorbbecsdk2`。两个厂商都有 aarch64 预编译包，`pip` 即可安装（2026-10 核对）：
 
 | 厂商 | 包 | Jetson 安装方式 | 备注 |
 |---|---|---|---|
@@ -565,15 +568,16 @@ detector:
 
 深度、D2C 对齐、伪彩显示都能在 Python 里完成：`pyrealsense2` 的 `align` 与 `pyorbbecsdk` 的 `set_align_mode(HW_MODE)` 都是 SDK 内部的 C++ 实现在跑，Python 只负责调用，没有性能损失。
 
-**真正的约束不是语言，是设备独占**：同一台相机的 `/dev/videoX` 同一时刻只能被一个进程持有。所以「C++ 侧车」与「Python 直接读深度」互斥，必须二选一：
+**设备独占只约束直连路径**：同一台相机的 `/dev/videoX` 同一时刻只能被一个进程持有，所以「C++ 侧车直连」与「Python 用 SDK 读深度」互斥。cockpit 机器上相机由 cockpit 持有，侧车与 Python 可以同时订阅同一路 topic，不存在这个冲突：
 
 | 路径 | 做法 | 代价 | 适用 |
 |---|---|---|---|
-| **A 深度优先**（建议先走） | 不上侧车，Python + 厂商 SDK 全栈；彩色与深度同进程，对齐最省事 | 保留 torch 依赖；性能靠导出 TensorRT engine 提升 | 深度与检测框要对齐、要标注距离 |
-| **B 侧车优先** | C++ 侧车接厂商 C++ SDK，把深度一并带出来，协议加 depth 字段 | C++ 工作量 +200~250 行；GMSL 的驱动与解串板问题要一并解决 | 已确认推理是瓶颈，且深度只需并列显示 |
+| **A 深度优先**（RealSense 建议先走） | 不上侧车，Python + `pyrealsense2`（奥比中光直连则用 `pyorbbecsdk2`）全栈；彩色与深度同进程，对齐最省事 | 保留 torch 依赖；性能靠导出 TensorRT engine 提升 | 深度与检测框要对齐、要标注距离 |
+| **B 侧车优先**（直连相机） | C++ 侧车接相机：RealSense 用 librealsense C++，奥比中光直连时用 Orbbec SDK C++，把深度一并带出来，协议加 depth 字段 | C++ 工作量 +200~250 行；奥比中光 GMSL 的驱动与解串板问题要一并解决 | 已确认推理是瓶颈，且深度只需并列显示 |
 | **C 两条线共存** | 侧车管彩色与检测，第二台相机管深度 | 需要第二台相机 | 不建议 |
+| **D cockpit topic**（ABO1，推荐） | 侧车与 Python 都从 yirt2 topic 取彩色 / 深度，协议加 depth 字段；不碰 GMSL 与厂商 SDK | 依赖 cockpit 生命周期与 root 权限；C++ 侧车需要确认 cockpit 是否提供 C++ 接口，否则继续用 Python 桥接 | 机器已有 cockpit 并托管相机 |
 
-**一处不可逆的返工**：若先走 A（Python 读深度）后来改走 B，A 的深度模块要整体重写进 C++。这是本项目唯一一处「顺序选错必然返工」的地方，因此**深度与侧车谁先上，必须明确排序，不能同时开**。
+**一处不可逆的返工**：在直连路径上，若先走 A（Python 读深度）后来改走 B，A 的深度模块要整体重写进 C++。这是本项目唯一一处「顺序选错必然返工」的地方，因此**深度与侧车谁先上，必须明确排序，不能同时开**。走 D（cockpit topic）则没有这个约束，深度与彩色都只是订阅。
 
 ---
 
@@ -644,7 +648,7 @@ M2 比原估多给 1 天，因为跟踪调参和浏览器音频解锁是最容�
 | edge-tts 断网/被墙 | 合成超时 | Web 通道改浏览器 `speechSynthesis`；本体通道播固定提示音 |
 | TTS 与画面抢 CPU | 播报时帧率掉 | 合成放独立线程，音频生成后只做一次播放 |
 | 容器内声卡不通 | `fd` 打不开 `/dev/snd` | 退回裸机 venv + systemd，Docker 只作为可选交付 |
-| 335Lg 的 USB-C 不暴露标准 UVC 彩色流 | 打开后无图像 | 一期不承诺；二期用 Orbbec SDK 接入并做技术验证（spike），验证不过则只保留 GMSL 路径 |
+| 335Lg 的 USB-C 不暴露标准 UVC 彩色流 | 打开后无图像 | cockpit 机器上改走 yirt2 topic；没有 cockpit 时二期再评估 Orbbec SDK 或 GMSL，不默认自研 |
 | 内存持续增长 | 30 分钟后 RSS 上涨 | 帧缓存单槽覆盖、告警列表定长、截图按数量清理 |
 | 二期换 C++ 侧车时框坐标对不上 | 框整体偏移或缩放错误 | 先用同一张静态图逐一比对 Python 与 C++ 的 `xyxy`，通过后再接实时流 |
 | 两个进程同时打开同一相机 | 第二个进程报设备忙 | 侧车模式下一次只有一个进程持有 `/dev/videoX`，由 `backend` 配置决定归属 |
@@ -658,7 +662,7 @@ M2 比原估多给 1 天，因为跟踪调参和浏览器音频解锁是最容�
 - 多路相机同时推理、跨设备协同。
 - 视频录制、历史回放、时间轴拖动。
 - 账号体系、权限控制、公网部署、HTTPS 证书。
-- 深度图显示与点云（二期）、GMSL 接入（二期）、WebRTC（二期）、物理开关（二期）。
+- 深度图显示与点云（二期：奥比中光从 cockpit depth topic 取，RealSense 用 pyrealsense2）、WebRTC（二期）、物理开关（二期）；奥比中光不直接接 GMSL / SDK。
 - 手机推送、邮件通知、与企业 IM 打通。
 - 人流统计报表、热力图、驻留时长分析。
 
